@@ -1,0 +1,8 @@
+[
+  "visible:tray-alive",
+  "close:hidden-window-and-live-tray",
+  "click:window-restored",
+  "menu:show-update-quit",
+  "menu:window-restored",
+  "quit:window-and-tray-destroyed"
+]

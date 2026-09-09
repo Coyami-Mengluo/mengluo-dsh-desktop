@@ -1,0 +1,11 @@
+[
+  "caption:uniform-icons-minimize-maximize-restore-tray",
+  "offline:retry-visible",
+  "catalog:waits-for-choice",
+  "install:continuous-and-reduced-motion",
+  "install:failure-with-real-progress",
+  "retry:selected-version-started",
+  "official:no-install-bridge",
+  "update:continuous-and-reduced-motion",
+  "update:measured-progress-and-failure"
+]
