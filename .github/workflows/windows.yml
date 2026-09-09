@@ -1,0 +1,48 @@
+name: Windows checks and local release artifacts
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - run: npm run prepare:electron
+      - run: npm run prepare:icon
+      - run: npm test
+      - run: npm run check:release
+      - run: npm run smoke:setup
+      - run: npm run smoke:tray
+      - run: npm run smoke:client-update
+      - name: Build unsigned review artifacts (manual run only)
+        if: github.event_name == 'workflow_dispatch'
+        run: npm run dist:win
+      - name: Verify packaged client update UI
+        if: github.event_name == 'workflow_dispatch'
+        run: npm run smoke:client-update:packaged
+      - name: Upload workflow artifacts, not a GitHub Release
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: unsigned-windows-x64-review
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist/*-setup.exe
+            dist/*-setup.exe.blockmap
+            dist/*-portable.exe
+            dist/latest.yml

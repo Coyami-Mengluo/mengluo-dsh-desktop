@@ -10,7 +10,7 @@
 
 关闭主窗口会隐藏到托盘。右键托盘，或按 **Ctrl+Alt+U** 打开菜单；选择“退出”才会停止客户端和 Harness。菜单也提供 Harness 终端，使用已选运行时的 Node 和 `dsh`，以及固定版本的 npm/npx/pnpm 工具。Git 只有在 Windows 已安装时才可用。
 
-占位图标是随源码提供的原创 SVG，采用本项目 MIT 许可证，不是 DeepSeek 官方标志。
+透明应用图标是维护者提供的 AI 生成插画，不是 DeepSeek 官方标志。来源与独立使用说明见[图标素材说明](assets/ARTWORK.md)。原先采用 MIT 的几何 SVG 仍保留作为替代素材。
 
 ## 两条独立的更新路径
 
@@ -50,4 +50,4 @@ npm.cmd run check:release
 
 ## 许可证
 
-外壳和占位 SVG 采用 [MIT](LICENSE)。第三方组件保留各自的许可证，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目许可证不授予 DeepSeek 名称或商标权利。
+外壳和原占位 SVG 采用 [MIT](LICENSE)。插画 PNG 不包含在该授权内，见[图标素材说明](assets/ARTWORK.md)。第三方组件保留各自的许可证，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目许可证不授予 DeepSeek 名称或商标权利。

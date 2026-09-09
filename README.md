@@ -10,7 +10,7 @@ Download the **setup.exe** from this repository's Releases when a release is ava
 
 Closing the main window hides it to the tray. Right-click the tray, or press **Ctrl+Alt+U**, for the menu; choose **Quit** to stop the client and Harness. The menu also opens a terminal with the selected Harness runtime's Node and `dsh`, plus pinned npm/npx/pnpm tooling. Git is available only if installed on Windows.
 
-The placeholder icon is an original SVG included under this project's MIT license. It is not an official DeepSeek logo.
+The transparent application icon is AI-generated artwork supplied by the maintainer, not an official DeepSeek logo. Artwork provenance and its separate terms are in [the artwork notice](assets/ARTWORK.md). The original MIT geometric SVG is retained as an alternative.
 
 ## Two separate update paths
 
@@ -50,4 +50,4 @@ The official UI runs without a preload bridge, Node integration or injected UI p
 
 ## License
 
-The shell and placeholder SVG use [MIT](LICENSE). Third-party components retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). DeepSeek's name and marks are not granted by this project's license.
+The shell and original placeholder SVG use [MIT](LICENSE). The illustrated PNG is excluded from that grant; see [the artwork notice](assets/ARTWORK.md). Third-party components retain their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). DeepSeek's name and marks are not granted by this project's license.
