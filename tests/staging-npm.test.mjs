@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
@@ -51,7 +51,8 @@ describe('shell npm updater staging', () => {
     const calls = []
 
     try {
-      assert.equal(resolveTrustedNpmRoot(programFiles), sourceRoot)
+      // Compare canonical paths, including when Windows TEMP uses an 8.3 alias.
+      assert.equal(resolveTrustedNpmRoot(programFiles), realpathSync.native(sourceRoot))
       const staged = stageNpmTooling({
         appRoot,
         programFiles,

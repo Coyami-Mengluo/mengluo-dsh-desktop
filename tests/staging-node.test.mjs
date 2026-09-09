@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
@@ -76,7 +76,8 @@ describe('standalone Node staging', () => {
     writeFileSync(sentinel, 'keep')
 
     try {
-      assert.equal(resolveTrustedNodeExecutable(programFiles), join(nodeDirectory, 'node.exe'))
+      // Hosted Windows TEMP can use an 8.3 alias; the resolver returns the real path.
+      assert.equal(resolveTrustedNodeExecutable(programFiles), realpathSync.native(join(nodeDirectory, 'node.exe')))
       const staged = await stageNodeRuntime({
         appRoot,
         programFiles,
