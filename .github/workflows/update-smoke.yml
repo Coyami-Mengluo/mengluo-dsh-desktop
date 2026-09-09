@@ -6,11 +6,11 @@ on:
       from_version:
         description: Existing public installer version (without v)
         required: true
-        default: '0.5.0'
+        default: '0.5.2'
       to_version:
         description: Latest public installer version (without v)
         required: true
-        default: '0.5.1'
+        default: '0.5.3'
 
 permissions:
   contents: read

@@ -1,13 +1,13 @@
 # 发布与客户端自更新
 
-本地构建和源码导出不会自动提交、推送或公开 Release。公开仓库为 `Coyami-MengLuo/mengluo-dsh-desktop`。版本 `0.5.0` 是引入自更新的首个独立客户端版本；更早的私有安装包需要先手动安装一次 `0.5.0` 或更新的安装版，后续才可使用壳的自更新。
+本地构建和源码导出不会自动提交、推送或公开 Release。公开仓库为 `Coyami-MengLuo/mengluo-dsh-desktop`。版本 `0.5.2` 是首个公开版本；更早的私有安装包需要先手动安装一次 `0.5.2` 或更新的安装版，后续才可使用壳的自更新。
 
 ## 发布流程
 
 1. 审查源码、许可证和[图标素材说明](../assets/ARTWORK.md)，确认要公开的只有这个独立目录。不要上传原来的官方源码大目录、`.git` 历史、依赖、构建缓存、日志或用户数据。
 2. 在隔离或干净的 Windows x64 构建环境执行 `npm ci --ignore-scripts`、`npm run dist:win`、`npm run check:release`，以及源码版和打包版的界面冒烟测试。
-3. 使用经过核验的同一组产物创建**草稿** GitHub Release，标签严格为 `v0.5.0`（以后与 package.json 的版本一致）。不能把不同构建的安装器、blockmap 和元数据混用。
-4. 上传 `MengLuo-DSH-Desktop-0.5.0-setup.exe`、同名 `.exe.blockmap`、便携版以及 `latest.yml`。元数据的文件名、大小和 SHA-512 必须匹配安装器；所有附件准备好后，再人工发布草稿为正式 Release。
+3. 使用经过核验的同一组产物创建**草稿** GitHub Release，标签严格为 `v0.5.2`（以后与 package.json 的版本一致）。不能把不同构建的安装器、blockmap 和元数据混用。
+4. 上传 `MengLuo-DSH-Desktop-0.5.2-setup.exe`、同名 `.exe.blockmap`、便携版以及 `latest.yml`。元数据的文件名、大小和 SHA-512 必须匹配安装器；所有附件准备好后，再人工发布草稿为正式 Release。
 5. 保留已发布旧版本的安装器和 `.blockmap`。有旧缓存和匹配 blockmap 时，更新器可复用未变化的数据块；缺失或服务不支持 Range 时会完整下载。首次没有可用缓存时可能也是完整下载。差分减少下载量，不是直接在线修改已安装文件。
 6. 在下一版本正式推送前，使用独立 Windows 测试用户验证真实的“旧安装版 → 检查 → 下载 → 确认 → 停止 Harness → 安装 → 重启”，以及代理、断网重试、缓存缺失、Hash 校验失败和用户数据保留。没有发布两个真实版本前，不应把 GitHub 全链路标记为已验证。
 

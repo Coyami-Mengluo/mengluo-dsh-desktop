@@ -6,7 +6,7 @@
 
 ## 安装与使用
 
-发布后，从本仓库 Releases 下载 **setup.exe 安装版**。首次启动会让你选择官方 Harness 版本，再从官方 npm 发布源安装其生产依赖；已有且通过验证的版本会直接沿用。安装包包含 Electron、安装用 Node 和 npm，不预装 Harness。支持 Windows x64；未签名的预览版可能触发 SmartScreen 警告。
+从 [GitHub Releases](https://github.com/Coyami-Mengluo/mengluo-dsh-desktop/releases/latest) 下载 **setup.exe 安装版**。首次启动会让你选择官方 Harness 版本，再从官方 npm 发布源安装其生产依赖；已有且通过验证的版本会直接沿用。安装包包含 Electron、安装用 Node 和 npm，不预装 Harness。支持 Windows x64；未签名的预览版可能触发 SmartScreen 警告。
 
 关闭主窗口会隐藏到托盘。右键托盘，或按 **Ctrl+Alt+U** 打开菜单；选择“退出”才会停止客户端和 Harness。菜单也提供 Harness 终端，使用已选运行时的 Node 和 `dsh`，以及固定版本的 npm/npx/pnpm 工具。Git 只有在 Windows 已安装时才可用。
 

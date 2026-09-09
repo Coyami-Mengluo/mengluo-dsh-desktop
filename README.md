@@ -6,7 +6,7 @@ An unofficial, personal-maintainer Windows desktop client for [DeepSeek Harness]
 
 ## Install and use
 
-Download the **setup.exe** from this repository's Releases when a release is available. The first launch asks you to choose an official Harness version and installs its production dependencies from the official npm registry. An existing verified installation is reused. The installer includes Electron, installation Node and npm, but not Harness itself. Windows x64 is the supported platform. Unsigned preview builds can trigger SmartScreen warnings.
+Download the **setup.exe** from [GitHub Releases](https://github.com/Coyami-Mengluo/mengluo-dsh-desktop/releases/latest). The first launch asks you to choose an official Harness version and installs its production dependencies from the official npm registry. An existing verified installation is reused. The installer includes Electron, installation Node and npm, but not Harness itself. Windows x64 is the supported platform. Unsigned preview builds can trigger SmartScreen warnings.
 
 Closing the main window hides it to the tray. Right-click the tray, or press **Ctrl+Alt+U**, for the menu; choose **Quit** to stop the client and Harness. The menu also opens a terminal with the selected Harness runtime's Node and `dsh`, plus pinned npm/npx/pnpm tooling. Git is available only if installed on Windows.
 
