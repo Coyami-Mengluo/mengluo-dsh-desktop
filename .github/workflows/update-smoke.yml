@@ -1,0 +1,45 @@
+name: GitHub release update smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      from_version:
+        description: Existing public installer version (without v)
+        required: true
+        default: '0.5.0'
+      to_version:
+        description: Latest public installer version (without v)
+        required: true
+        default: '0.5.1'
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: '24.19.0'
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - run: npm run prepare:electron
+      - name: Install old release and exercise the real client update path
+        run: node scripts/smoke-github-update.mjs
+        env:
+          DSH_E2E_FROM: ${{ inputs.from_version }}
+          DSH_E2E_TO: ${{ inputs.to_version }}
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Preserve update verification evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: github-update-verification
+          if-no-files-found: warn
+          retention-days: 14
+          path: build/github-update-smoke/
