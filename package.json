@@ -1,0 +1,103 @@
+{
+  "name": "mengluo-dsh-desktop",
+  "version": "0.5.0",
+  "description": "An unofficial Windows desktop client for DeepSeek Harness",
+  "license": "MIT",
+  "author": "MengLuo DSH Desktop contributors",
+  "repository": { "type": "git", "url": "https://github.com/Coyami-MengLuo/mengluo-dsh-desktop.git" },
+  "private": true,
+  "type": "module",
+  "main": "src/main.mjs",
+  "scripts": {
+    "prepare:electron": "node node_modules/electron/install.js",
+    "prepare:icon": "node scripts/render-icon.mjs",
+    "prepare:tools": "node scripts/prepare-tools.mjs",
+    "start": "npm run prepare:electron && npm run prepare:icon && npm run stage:node && npm run stage:npm && electron .",
+    "test": "node --test tests/*.test.mjs",
+    "stage:node": "node scripts/stage-node.mjs",
+    "stage:npm": "node scripts/stage-npm.mjs",
+    "smoke:tray": "node scripts/smoke-tray.mjs",
+    "smoke:tray:packaged": "node scripts/smoke-tray.mjs --packaged",
+    "smoke:setup": "node scripts/smoke-setup.mjs",
+    "smoke:setup:packaged": "node scripts/smoke-setup.mjs --packaged",
+    "smoke:client-update": "node scripts/smoke-client-update.mjs",
+    "smoke:client-update:packaged": "node scripts/smoke-client-update.mjs --packaged",
+    "check:release": "node scripts/check-release.mjs",
+    "dist:win": "npm run prepare:electron && npm run prepare:icon && npm test && npm run stage:node && npm run stage:npm && node scripts/package.mjs"
+  },
+  "engines": { "node": ">=24" },
+  "dependencies": { "electron-updater": "6.8.9", "builder-util-runtime": "9.7.0" },
+  "devDependencies": {
+    "@resvg/resvg-js": "2.6.2",
+    "electron": "43.2.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "ai.mengluo.desktop",
+    "productName": "MengLuo DSH Desktop",
+    "asar": true,
+    "asarUnpack": [
+      "src/**/*",
+      "assets/titlebar.*",
+      "assets/setup.*",
+      "assets/progress-meter.*",
+      "assets/shell-update.*",
+      "assets/icon.png",
+      "assets/terminal-bin/**/*"
+    ],
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json",
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md",
+      "licenses/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "build",
+        "to": ".",
+        "filter": [
+          "runtime/node-runtime/**/*",
+          "updater/npm/**/*"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "assets/icon.png",
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "MengLuo-DSH-Desktop-${version}-portable.${ext}"
+    },
+    "nsis": {
+      "artifactName": "MengLuo-DSH-Desktop-${version}-setup.${ext}",
+      "differentialPackage": true,
+      "deleteAppDataOnUninstall": false,
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MengLuo DSH Desktop",
+      "uninstallDisplayName": "MengLuo DSH Desktop ${version}"
+    }
+  }
+}

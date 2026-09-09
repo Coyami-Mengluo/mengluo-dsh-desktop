@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; require-trusted-types-for 'script'">
+  <title>客户端更新</title>
+  <link rel="stylesheet" href="./shell-update.css">
+  <link rel="stylesheet" href="./progress-meter.css">
+</head>
+<body>
+  <main>
+    <p class="eyebrow">MENG LUO · DESKTOP UPDATE</p>
+    <h1 id="status">客户端更新</h1>
+    <p id="version"></p>
+    <div id="progress" class="progress-meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="客户端下载进度" hidden>
+      <span class="progress-fill" aria-hidden="true"></span>
+      <span class="progress-sweep" aria-hidden="true"></span>
+    </div>
+    <p id="transfer" role="status" aria-live="polite"></p>
+    <p id="error" role="alert" hidden></p>
+    <p class="note">优先差分下载，无法差分时自动下载完整安装包。只更新客户端，不替换 Harness、插件或聊天数据。</p>
+    <div class="actions">
+      <button id="check">检查更新</button>
+      <button id="download" hidden>下载更新</button>
+      <button id="install" hidden>重启安装</button>
+    </div>
+    <p class="note">关闭窗口不会取消下载。安装前会再次询问，平时退出不会自动安装。</p>
+  </main>
+  <script src="./shell-update.js" type="module"></script>
+</body>
+</html>

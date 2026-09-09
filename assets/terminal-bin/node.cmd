@@ -1,0 +1,2 @@
+@ECHO OFF
+"%DSH_DESKTOP_NODE%" %*

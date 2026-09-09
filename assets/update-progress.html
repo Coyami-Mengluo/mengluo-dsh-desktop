@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <title>MengLuo DSH Desktop · Harness 更新</title>
+  <link rel="stylesheet" href="./update-progress.css">
+  <link rel="stylesheet" href="./progress-meter.css">
+</head>
+<body>
+  <main aria-live="polite">
+    <p class="eyebrow">MENGLUO DSH DESKTOP · HARNESS UPDATE</p>
+    <div class="heading-row">
+      <h1 id="stage-label">检查更新信息</h1>
+      <span id="percent-label">进行中</span>
+    </div>
+    <p id="version-label" class="version"></p>
+    <div id="progress" class="progress-meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="更新准备进度">
+      <span class="progress-fill" aria-hidden="true"></span>
+      <span class="progress-sweep" aria-hidden="true"></span>
+    </div>
+    <p id="timing-label" class="timing">预计总耗时 10–20 分钟 · npm 安装上限 30 分钟</p>
+    <ol id="stages">
+      <li data-stage="checking">检查</li>
+      <li data-stage="preparing">准备目录</li>
+      <li data-stage="installing">npm 下载安装</li>
+      <li data-stage="verifying">校验依赖</li>
+      <li data-stage="smoke">启动测试</li>
+      <li data-stage="finalizing">安全收尾</li>
+      <li data-stage="complete">完成</li>
+    </ol>
+    <p id="detail" class="detail">可以继续使用当前窗口，关闭此窗口不会取消更新。</p>
+  </main>
+  <script src="./update-progress.js" type="module"></script>
+</body>
+</html>

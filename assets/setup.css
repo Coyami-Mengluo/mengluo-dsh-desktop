@@ -1,0 +1,44 @@
+#setup-panel[hidden], #setup-panel [hidden] { display: none; }
+#setup-panel {
+  position: absolute;
+  inset: 44px 0 0;
+  z-index: 3;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: #f5f7fb;
+  color: #182235;
+  user-select: text;
+  --setup-muted: #59677d;
+  --setup-border: #d4dcea;
+  --setup-field: #ffffff;
+}
+#setup-card { width: min(100%, 620px); }
+#setup-card > img { display: block; margin-bottom: 16px; }
+.setup-eyebrow { color: #4267dc; font-size: 11px; font-weight: 700; letter-spacing: .16em; }
+#setup-card h1 { margin: 12px 0; font-size: 29px; font-weight: 650; }
+.setup-intro, .setup-note { color: var(--setup-muted); font-size: 14px; line-height: 1.7; }
+.setup-note { margin-top: 24px; font-size: 12px; }
+#setup-card label { display: block; margin: 28px 0 9px; font-size: 13px; font-weight: 600; }
+#setup-version {
+  width: 100%; padding: 12px; font: inherit; font-size: 14px;
+  color: inherit; background: var(--setup-field); border: 1px solid var(--setup-border); border-radius: 8px;
+}
+.setup-actions { display: flex; gap: 12px; margin: 18px 0 22px; }
+.setup-actions button {
+  border: 1px solid transparent; border-radius: 8px; padding: 11px 20px;
+  color: #fff; background: #4165e4; font: inherit; font-size: 14px; cursor: pointer;
+}
+.setup-actions button.secondary { color: inherit; background: var(--setup-field); border-color: var(--setup-border); }
+.setup-actions button:disabled, #setup-version:disabled { opacity: .5; cursor: default; }
+.setup-actions button:focus-visible, #setup-version:focus-visible { outline: 2px solid #4165e4; outline-offset: 3px; }
+#setup-status { min-height: 22px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; }
+#setup-reason { color: #a43b23; border-left: 3px solid #d17a50; padding-left: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+#setup-progress { margin-top: 14px; }
+#setup-files, #setup-timing { font-size: 12px; line-height: 1.6; color: var(--setup-muted); }
+@media (prefers-color-scheme: dark) {
+  #setup-panel { background: #111318; color: #edf0f7; --setup-muted: #9da9bf; --setup-border: #343b4b; --setup-field: #1c212c; }
+  .setup-eyebrow { color: #90a7ff; }
+  #setup-reason { color: #ffb294; }
+}

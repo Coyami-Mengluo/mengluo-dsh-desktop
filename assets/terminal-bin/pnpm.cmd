@@ -1,0 +1,2 @@
+@ECHO OFF
+"%DSH_DESKTOP_NODE%" "%DSH_DESKTOP_NPX_CLI%" --yes pnpm@11.7.0 %*

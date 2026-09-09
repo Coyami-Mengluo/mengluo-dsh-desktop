@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN" data-focused="true" data-fullscreen="false" data-background-layer="a">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; font-src 'none'; media-src 'none'; object-src 'none'; child-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'">
+  <title>MengLuo DSH Desktop</title>
+  <link rel="stylesheet" href="./titlebar.css">
+  <link rel="stylesheet" href="./setup.css">
+  <link rel="stylesheet" href="./progress-meter.css">
+</head>
+<body>
+  <header id="titlebar" aria-label="应用标题栏">
+    <div id="titlebar-background-a" class="titlebar-background" aria-hidden="true"></div>
+    <div id="titlebar-background-b" class="titlebar-background" aria-hidden="true"></div>
+    <div id="drag-region">
+      <img src="./icon.png" alt="" width="18" height="18" draggable="false">
+      <span id="product-name">MengLuo DSH Desktop</span>
+    </div>
+    <div id="window-controls" role="group" aria-label="窗口操作">
+      <button id="window-minimize" type="button" aria-label="最小化">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10"/></svg>
+      </button>
+      <button id="window-maximize" type="button" aria-label="最大化">
+        <svg class="maximize-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1"/></svg>
+        <svg class="restore-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v-1h8v8h-1"/><rect x="2.5" y="5.5" width="8" height="8" rx="1"/></svg>
+      </button>
+      <button id="window-close" type="button" aria-label="关闭到托盘">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>
+      </button>
+    </div>
+  </header>
+  <main id="loading-panel" aria-live="polite">
+    <p id="loading-wordmark">HARNESS</p>
+    <p id="loading-detail">正在启动 DeepSeek Harness…</p>
+    <span id="loading-spinner" role="status" aria-label="正在启动"></span>
+  </main>
+  <section id="setup-panel" hidden aria-label="安装 Harness">
+    <div id="setup-card">
+      <img src="./icon.png" width="64" height="64" alt="">
+      <p class="setup-eyebrow">MENGLUO DSH DESKTOP</p>
+      <h1>选择你的 Harness 版本</h1>
+      <p class="setup-intro">客户端不预装 Harness。首次使用时，从官方 npm 发布源安装你选择的版本。</p>
+      <p id="setup-reason" role="alert" hidden></p>
+      <label for="setup-version">官方版本</label>
+      <select id="setup-version" disabled aria-label="选择 Harness 版本"></select>
+      <div class="setup-actions">
+        <button id="setup-install" disabled>安装并启动</button>
+        <button id="setup-refresh" class="secondary">刷新版本</button>
+      </div>
+      <div id="setup-status" role="status" aria-live="polite">正在准备安装界面…</div>
+      <div id="setup-progress" class="progress-meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" hidden aria-label="安装进度">
+        <span class="progress-fill" aria-hidden="true"></span>
+        <span class="progress-sweep" aria-hidden="true"></span>
+      </div>
+      <p id="setup-files"></p>
+      <p id="setup-timing"></p>
+      <p class="setup-note">安装完成后可直接启动，无需再安装 Node 或 npm。关闭窗口会隐藏到托盘，不会中断安装。</p>
+    </div>
+  </section>
+  <script src="./titlebar.js"></script>
+  <script src="./setup.js" type="module"></script>
+</body>
+</html>

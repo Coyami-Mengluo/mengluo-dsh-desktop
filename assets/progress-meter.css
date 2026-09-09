@@ -1,0 +1,53 @@
+.progress-meter {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #dfe4ef;
+  contain: paint;
+}
+.progress-meter[hidden] { display: none; }
+.progress-fill, .progress-sweep {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: #4165e4;
+  transform-origin: left center;
+}
+.progress-fill {
+  transform: scaleX(0);
+  transition: transform 240ms linear;
+}
+.progress-sweep { display: none; width: 30%; }
+.progress-meter[data-mode="indeterminate"] .progress-fill {
+  opacity: 0;
+  transition: none;
+}
+.progress-meter[data-mode="indeterminate"] .progress-sweep {
+  display: block;
+  will-change: transform;
+  animation: progress-sweep 1.6s cubic-bezier(.4, 0, .2, 1) infinite;
+}
+.progress-meter[data-mode="failed"] .progress-fill {
+  background: #d64545;
+  transition: none;
+}
+@keyframes progress-sweep {
+  from { transform: translate3d(-110%, 0, 0); }
+  to { transform: translate3d(350%, 0, 0); }
+}
+@media (prefers-color-scheme: dark) {
+  .progress-meter { background: #292e39; }
+}
+:root[data-theme="dark"] .progress-meter { background: #292e39; }
+:root[data-theme="light"] .progress-meter { background: #dfe4ef; }
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill { transition: none; }
+  .progress-meter[data-mode="indeterminate"] .progress-sweep {
+    animation: none;
+    will-change: auto;
+    transform: translate3d(116.6667%, 0, 0);
+  }
+}
