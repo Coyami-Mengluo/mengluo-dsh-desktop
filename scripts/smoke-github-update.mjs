@@ -75,7 +75,12 @@ function run(command, args, timeout = 120_000, env = childEnv) {
 }
 
 function installedVersion() {
-  try { return JSON.parse(asar.extractFile(join(installRoot, 'resources', 'app.asar'), 'package.json').toString()).version }
+  try {
+    const archive = join(installRoot, 'resources', 'app.asar')
+    // The installer replaces this path in place; do not reuse the old ASAR header.
+    asar.uncache(archive)
+    return JSON.parse(asar.extractFile(archive, 'package.json').toString()).version
+  }
   catch { return undefined }
 }
 
@@ -125,7 +130,8 @@ try {
   console.log(trace.trim())
   const result = JSON.parse(readFileSync(reportPath, 'utf8'))
   assert.equal(result.downloadVerified, true)
-  assert.equal(result.shutdownBeforeInstaller, true)
+  assert.equal(result.shutdownPreparedBeforeInstaller, true)
+  assert.equal(result.windowsClosedOnQuit, true)
   assert.equal(result.requestedInstall, true)
   assert.ok(result.transferred > 0 && result.transferred < newInfo.files[0].size, 'This fixture requires a real differential transfer')
   for (let attempt = 0; attempt < 90; attempt += 1) {

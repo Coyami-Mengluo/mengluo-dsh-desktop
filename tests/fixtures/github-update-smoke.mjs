@@ -24,6 +24,8 @@ app.setPath('sessionData', session)
 const report = { from: expected.from, to: expected.to, transferred: 0, installerSize: expected.info.files[0].size, downloadVerified: false, requestedInstall: false }
 const save = () => writeFileSync(join(temporary, 'update-report.json'), JSON.stringify(report, null, 2) + '\n')
 const fail = error => { report.error = String(error.stack ?? error); save(); process.stderr.write(`${report.error}\n`); app.exit(1) }
+let quitRequested = false
+app.on('before-quit', () => { quitRequested = true })
 const require = createRequire(join(application, 'package.json'))
 const { NsisUpdater } = require('electron-updater')
 const download = NsisUpdater.prototype.doDownloadUpdate
@@ -39,8 +41,15 @@ NsisUpdater.prototype.quitAndInstall = function (silent, forceRun) {
   assert.equal(bytes.length, expected.info.files[0].size)
   assert.equal(createHash('sha512').update(bytes).digest('base64'), expected.info.files[0].sha512)
   report.downloadVerified = true
-  report.shutdownBeforeInstaller = BrowserWindow.getAllWindows().length === 0
-  assert.equal(report.shutdownBeforeInstaller, true)
+  // BaseUpdater starts the installer and then calls app.quit(). At this point
+  // the main titlebar window may still exist; progress windows and the official
+  // WebContentsView must already have been disposed by the packaged main entry.
+  const remainingWindows = BrowserWindow.getAllWindows()
+  report.shutdownPreparedBeforeInstaller = quitRequested
+    && remainingWindows.length === 1
+    && remainingWindows[0].contentView.children.length === 0
+    && !remainingWindows[0].getTitle().includes('客户端更新')
+  assert.equal(report.shutdownPreparedBeforeInstaller, true, 'Packaged main must prepare shutdown before calling the installer')
   report.requestedInstall = true
   report.mode = 'Real packaged main/menu/updater; installer UI is silent only for the disposable CI VM'
   save()
@@ -72,7 +81,11 @@ dialog.showMessageBox = async (...args) => {
 // Electron net.request against the real, fixed public GitHub release provider.
 net.fetch = async () => new Response('No Harness installation during client update test', { status: 503 })
 const deadline = setTimeout(() => fail(new Error('Real GitHub client update timed out')), 7 * 60_000)
-app.on('will-quit', () => { clearTimeout(deadline); save() })
+app.on('will-quit', () => {
+  clearTimeout(deadline)
+  report.windowsClosedOnQuit = BrowserWindow.getAllWindows().length === 0
+  save()
+})
 async function waitFor(predicate, timeout = 30_000) {
   const start = Date.now()
   while (Date.now() - start < timeout) {
