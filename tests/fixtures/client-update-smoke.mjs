@@ -45,7 +45,9 @@ async function run() {
   assert.equal(await contents.executeJavaScript("typeof require + ':' + typeof process"), 'undefined:undefined')
   assert.equal(await contents.executeJavaScript("Object.keys(window.clientUpdate).sort().join(',')"), 'check,download,install,onState')
   assert.match(await contents.executeJavaScript("document.getElementById('transfer').textContent"), /1\.0 MB \/ 4\.0 MB.*预计剩余 3 秒/u)
-  assert.equal(await contents.executeJavaScript('document.documentElement.scrollHeight <= innerHeight'), true)
+  writeFileSync(join(screenshots, 'client-update-light.png'), (await contents.capturePage()).toPNG())
+  const layout = await contents.executeJavaScript('({height:innerHeight,width:innerWidth,scrollHeight:document.documentElement.scrollHeight,dpr:devicePixelRatio})')
+  assert.ok(layout.scrollHeight <= layout.height, `Update window overflow: ${JSON.stringify(layout)}`)
   const event = { sender: contents, senderFrame: contents.mainFrame }
   for (const rejected of [
     { sender: {}, senderFrame: contents.mainFrame },
