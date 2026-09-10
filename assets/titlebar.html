@@ -40,8 +40,16 @@
       <img src="./icon.png" width="64" height="64" alt="">
       <p class="setup-eyebrow">MENGLUO DSH DESKTOP</p>
       <h1>选择你的 Harness 版本</h1>
-      <p class="setup-intro">客户端不预装 Harness。首次使用时，从官方 npm 发布源安装你选择的版本。</p>
+      <p class="setup-intro">客户端不预装 Harness。请选择下载源和官方版本，确认后才会开始安装。</p>
       <p id="setup-reason" role="alert" hidden></p>
+      <label for="setup-source">Harness 下载源</label>
+      <div class="setup-source-row">
+        <select id="setup-source" disabled aria-describedby="setup-source-detail setup-source-scope"></select>
+        <button id="setup-source-test" class="secondary" type="button" disabled>检测连接</button>
+      </div>
+      <p id="setup-source-detail" class="setup-source-note" aria-live="polite"></p>
+      <p id="setup-source-scope" class="setup-source-note">仅影响 npm 包下载，不加速 GitHub 或启动测试。版本与完整性校验仍以官方元数据为准，不更改系统 npm 设置。</p>
+      <p id="setup-source-status" role="status" aria-live="polite" hidden></p>
       <label for="setup-version">官方版本</label>
       <select id="setup-version" disabled aria-label="选择 Harness 版本"></select>
       <div class="setup-actions">

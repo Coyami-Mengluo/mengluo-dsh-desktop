@@ -95,7 +95,28 @@ export class ShellUpdateManager {
       mkdirSync(this.options.userData, { recursive: true })
       writeFileSync(`${this.preferencesPath}.tmp`, `${JSON.stringify(this.preferences)}\n`)
       renameSync(`${this.preferencesPath}.tmp`, this.preferencesPath)
-    } catch (error) { this.options.log(`client update preferences save failed: ${String(error)}\n`) }
+      return true
+    } catch (error) { this.options.log(`client update preferences save failed: ${String(error)}\n`); return false }
+  }
+
+  updatePreferences(patch) {
+    if (this.disposed) return
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)
+      || ![Object.prototype, null].includes(Object.getPrototypeOf(patch))
+      || Object.keys(patch).length !== 1 || !Object.hasOwn(patch, 'autoCheck')
+      || typeof patch.autoCheck !== 'boolean') throw new Error('无效的客户端更新设置')
+    const previous = this.preferences
+    this.preferences = { ...previous, autoCheck: patch.autoCheck }
+    if (!this.persist()) { this.preferences = previous; throw new Error('无法保存客户端更新设置') }
+    this.schedule(true)
+    this.options.onMenuChanged?.()
+  }
+
+  getSettingsState() {
+    return {
+      ...this.state, supported: this.options.supported, autoCheck: this.preferences.autoCheck,
+      error: this.state.status === 'error' ? '客户端更新未完成，请重试或查看日志。' : undefined,
+    }
   }
 
   schedule(initial = false) {
@@ -204,7 +225,7 @@ export class ShellUpdateManager {
   async install() {
     if (this.disposed || this.state.status !== 'downloaded' || this.installPrompt) return
     if (this.options.isHarnessInstalling()) {
-      await this.options.showMessage({ type: 'info', title: '客户端更新', message: '请等待 Harness 安装或更新完成后再重启客户端' })
+      await this.options.showMessage({ type: 'info', title: '客户端更新', message: '请等待 Harness 安装、更新或插件操作完成后再重启客户端' })
       return
     }
     this.installPrompt = true

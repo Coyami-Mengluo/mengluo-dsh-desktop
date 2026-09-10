@@ -135,6 +135,43 @@ test('Harness installation prevents a client restart, including while the confir
   assert.deepEqual(f.actions, ['download'])
 })
 
+test('plugin operations block client installation before confirmation and allow retry after completion', async t => {
+  let pluginBusy = true
+  const harnessInstalling = false
+  const f = fixture(t, { isHarnessInstalling: () => harnessInstalling || pluginBusy })
+  await f.manager.check(false)
+  await f.manager.download()
+  await f.manager.install()
+  assert.equal(f.manager.state.status, 'downloaded')
+  assert.deepEqual(f.actions, ['download'])
+  assert.equal(f.options.installCallback, undefined)
+  assert.match(f.messages.at(-1).message, /插件操作/u)
+  pluginBusy = false
+  f.options.showMessage = async () => ({ response: 0 })
+  await f.manager.install()
+  assert.deepEqual(f.actions, ['download', 'shutdown-requested'])
+  assert.equal(f.manager.state.status, 'installing')
+  assert.equal(typeof f.options.installCallback, 'function')
+})
+
+test('a plugin operation starting during client installation confirmation prevents shutdown', async t => {
+  let pluginBusy = false
+  const f = fixture(t, { isHarnessInstalling: () => pluginBusy })
+  await f.manager.check(false)
+  await f.manager.download()
+  let answer
+  f.options.showMessage = () => new Promise(resolve => { answer = resolve })
+  const install = f.manager.install()
+  assert.equal(f.manager.installPrompt, true)
+  pluginBusy = true
+  answer({ response: 0 })
+  await install
+  assert.equal(f.manager.installPrompt, false)
+  assert.equal(f.manager.state.status, 'downloaded')
+  assert.deepEqual(f.actions, ['download'])
+  assert.equal(f.options.installCallback, undefined)
+})
+
 test('download failures and checksum rejection never enable installation', async t => {
   const f = fixture(t)
   await f.manager.check(false)
@@ -183,4 +220,28 @@ test('concurrent checks share one network request', async t => {
   assert.equal(calls, 1)
   assert.equal(f.manager.state.status, 'idle')
   assert.equal(f.notifications.length, 0)
+})
+
+test('client settings persist only autoCheck and expose a safe snapshot', async t => {
+  const f = fixture(t)
+  f.manager.updatePreferences({ autoCheck: false })
+  assert.equal(JSON.parse(readFileSync(f.manager.preferencesPath)).autoCheck, false)
+  assert.equal(f.manager.getSettingsState().autoCheck, false)
+  assert.equal(f.manager.getSettingsState().currentVersion, '0.5.0')
+  assert.equal(f.manager.getSettingsState().supported, true)
+  assert.deepEqual(f.actions, [])
+  for (const patch of [null, [], {}, { autoCheck: 'false' }, { autoCheck: true, feed: 'https://evil.example' }, Object.assign(Object.create({ autoCheck: true }), { feed: 'ignored' })]) {
+    assert.throws(() => f.manager.updatePreferences(patch))
+  }
+  f.manager.setState({ status: 'error', error: 'private fixture token' })
+  assert.doesNotMatch(JSON.stringify(f.manager.getSettingsState()), /private fixture/u)
+})
+
+test('client preference save failure rolls back without starting an update', t => {
+  const f = fixture(t)
+  f.manager.persist = () => false
+  assert.throws(() => f.manager.updatePreferences({ autoCheck: false }), /保存/u)
+  assert.equal(f.manager.getSettingsState().autoCheck, true)
+  assert.equal(f.manager.timer, undefined)
+  assert.deepEqual(f.actions, [])
 })

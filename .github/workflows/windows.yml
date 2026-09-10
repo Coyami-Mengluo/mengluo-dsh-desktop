@@ -26,6 +26,7 @@ jobs:
       - run: npm test
       - run: npm run check:release
       - run: npm run smoke:setup
+      - run: npm run smoke:settings
       - run: npm run smoke:tray
       - run: npm run smoke:client-update
       - name: Build unsigned review artifacts (manual run only)
@@ -34,6 +35,12 @@ jobs:
       - name: Verify packaged client update UI
         if: github.event_name == 'workflow_dispatch'
         run: npm run smoke:client-update:packaged
+      - name: Verify packaged settings UI
+        if: github.event_name == 'workflow_dispatch'
+        run: npm run smoke:settings:packaged
+      - name: Verify packaged main and settings integration
+        if: github.event_name == 'workflow_dispatch'
+        run: npm run smoke:main:packaged
       - name: Upload workflow artifacts, not a GitHub Release
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0

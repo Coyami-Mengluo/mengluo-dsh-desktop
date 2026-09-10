@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import {
   createBackendEnvironment,
-  createHarnessWebArguments,
+  createHarnessLaunchEnvironment,
+  createHarnessLaunchArguments,
   observeHarnessOutput,
   redactHarnessTokens,
   resolveWindowsTaskkillPath,
@@ -49,13 +50,11 @@ export async function smokeOfficialRuntime(options) {
       environment,
     })
     options.signal?.throwIfAborted()
-    child = spawn(options.executable, [
-      options.runnerPath,
-      options.cliPath,
-      ...createHarnessWebArguments(options.version, 0),
-    ], {
+    child = spawn(options.executable, createHarnessLaunchArguments({
+      runnerPath: options.runnerPath, cliPath: options.cliPath, version: options.version, port: 0,
+    }), {
       cwd: workspace,
-      env: environment,
+      env: createHarnessLaunchEnvironment(environment),
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     })

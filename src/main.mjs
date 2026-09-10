@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, Notification, shell, Tray, WebContentsView } from 'electron'
 import {
   BACKEND_TREE_KILL_DELAY_MS,
-  createBackendEnvironment,
-  createHarnessWebArguments,
+  createHarnessLaunchEnvironment,
+  createHarnessLaunchArguments,
   DESKTOP_PORT,
   observeHarnessOutput,
   redactHarnessTokens,
@@ -29,10 +29,15 @@ import { HarnessUpdateManager } from './update-manager.mjs'
 import { startShellThemeSync } from './shell-theme.mjs'
 import { captureTitlebarSnapshot, fallbackTitlebarSnapshot, TITLEBAR_IPC } from './titlebar-sampler.mjs'
 import { createUpdateProgressWindow } from './update-progress-window.mjs'
-import { PRODUCT_NAME } from './release-config.mjs'
+import { PRODUCT_NAME, SHELL_RELEASES_URL, SHELL_RELEASE_SOURCE } from './release-config.mjs'
 import { createNativeShellUpdater } from './native-shell-updater.mjs'
 import { ShellUpdateManager } from './shell-updater.mjs'
 import { createShellUpdateWindow } from './shell-update-window.mjs'
+import { createSettingsWindow } from './settings-window.mjs'
+import { DesktopSettingsController } from './settings-controller.mjs'
+import { PluginCatalog } from './plugin-catalog.mjs'
+import { PluginManager } from './plugin-manager.mjs'
+import { resolvePluginHome } from './plugin-runtime.mjs'
 
 const APP_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const LEGACY_PRODUCT_NAME = 'MengLuo AI'
@@ -68,6 +73,11 @@ let desktopWindow
 let desktopTray
 let shellUpdateManager
 let installClientAfterShutdown
+let settingsWindow
+let settingsController
+let pluginManager
+let pluginQuitNotice
+let pluginRecoveryExitApproved = false
 
 preserveLegacyUserData()
 app.setName(PRODUCT_NAME)
@@ -187,9 +197,19 @@ async function startApplication() {
     progressWindow: updateProgressWindow,
     showWindow: () => { desktopTray?.showWindow() },
     onHarnessMenuChanged: template => { desktopTray?.setHarnessMenu(template) },
-    getClientMenuItems: () => shellUpdateManager?.menuItems() ?? [],
+    onSettingsRequested: section => { showClientSettings(section) },
+    onSettingsChanged: () => { settingsController?.refresh() },
+    isPluginBusy: () => pluginManager?.blocksUpdates() === true,
+    getDownloadSource: () => settingsController?.preferences.source ?? 'official',
+    onDownloadStatus: status => { settingsController?.reportDownloadStatus(status) },
+    hasClientProgress: () => ['downloading', 'downloaded', 'installing', 'error'].includes(shellUpdateManager?.state.status),
+    onProgressRequested: () => {
+      if (updateManager?.installPromise || updateManager?.preparingVersion) updateManager.reportProgress('show')
+      else if (['downloading', 'downloaded', 'installing', 'error'].includes(shellUpdateManager?.state.status)) shellUpdateManager.options.progress?.show()
+      else updateManager?.reportProgress('show')
+    },
     requestRestart: () => {
-      if (quitStarted) return
+      if (quitStarted || pluginManager?.blocksUpdates()) return
       app.relaunch()
       app.quit()
     },
@@ -215,17 +235,62 @@ async function startApplication() {
     log: text => { appendLog('client-update', text) },
     openExternal: openExternalUrl,
     showMessage: options => mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options),
-    isHarnessInstalling: () => updateManager?.installPromise !== undefined,
+    isHarnessInstalling: () => updateManager?.installPromise !== undefined || pluginManager?.blocksUpdates() === true,
     onInstallError: error => {
       dialog.showErrorBox('客户端更新未安装', `安装程序未能启动，请重新打开客户端后重试。\n\n${String(error)}`)
       app.quit()
     },
     requestInstall: install => {
-      if (quitStarted || updateManager?.installPromise !== undefined) return false
+      if (quitStarted || updateManager?.installPromise !== undefined || pluginManager?.blocksUpdates()) return false
       installClientAfterShutdown = install
       app.quit()
       return true
     },
+  })
+  pluginManager = new PluginManager({
+    userData: app.getPath('userData'),
+    dshHome: resolvePluginHome({ workspacePath }),
+    catalog: new PluginCatalog({ fetch: (url, options) => net.fetch(url, options) }),
+    getRuntime: () => updateManager.currentRuntime,
+    isBlocked: () => quitStarted || updateManager.installPromise !== undefined
+      || updateManager.preparingVersion !== undefined || shellUpdateManager.state.status === 'installing'
+      || (backend !== undefined && backendOrigin === undefined && !hasExited(backend)),
+    npmCliPath: updaterNpmCliPath, terminalBinPath, workspacePath,
+    resolveProxy: url => updateManager.resolveSystemProxy('Harness plugin', url),
+    showMessage: options => settingsWindow?.window && !settingsWindow.window.isDestroyed()
+      ? dialog.showMessageBox(settingsWindow.window, options) : dialog.showMessageBox(options),
+    openExternal: openExternalUrl,
+    onChanged: () => { updateManager.rebuildMenu() },
+    log: text => { appendLog('plugins', redactHarnessTokens(text)) },
+  })
+  settingsController = new DesktopSettingsController({
+    userData: app.getPath('userData'), harness: updateManager, client: shellUpdateManager,
+    plugins: pluginManager,
+    productName: PRODUCT_NAME, app, net,
+    isStarting: () => backend !== undefined && backendOrigin === undefined && !hasExited(backend),
+    onChanged: state => {
+      settingsWindow?.update(state)
+      firstRunSetup?.refreshDownloadSettings()
+    },
+    logAvailable: () => typeof logPath === 'string' && existsSync(logPath),
+    showSetup: () => { desktopTray?.showWindow(); void firstRunSetup?.show() },
+    openLog: () => {
+      if (logPath) void shell.openPath(logPath).then(error => {
+        if (error) appendLog('settings', `could not open log: ${error}\n`)
+      }).catch(error => { appendLog('settings', `could not open log: ${String(error)}\n`) })
+    },
+    openRepository: () => openExternalUrl(`https://github.com/${SHELL_RELEASE_SOURCE.owner}/${SHELL_RELEASE_SOURCE.repo}`),
+    openOfficial: () => openExternalUrl('https://www.deepseek.com/harness/'),
+    openClientReleases: () => openExternalUrl(SHELL_RELEASES_URL),
+    log: text => { appendLog('settings', text) },
+  })
+  settingsWindow = createSettingsWindow({
+    BrowserWindow, ipcMain, nativeTheme, getParent: () => mainWindow,
+    productName: PRODUCT_NAME, iconPath: join(APP_ROOT, 'assets', 'icon.png'),
+    htmlPath: join(APP_ROOT, 'assets', 'settings.html'),
+    preloadPath: join(APP_ROOT, 'src', 'settings-preload.cjs'),
+    onAction: request => settingsController.handleAction(request),
+    log: text => { appendLog('settings', text) },
   })
   firstRunSetup = createFirstRunSetup({
     ipcMain,
@@ -233,6 +298,11 @@ async function startApplication() {
     updater: updateManager,
     htmlPath: join(APP_ROOT, 'assets', 'titlebar.html'),
     showLoading: () => { desktopWindow?.showLoading() },
+    downloadSettings: {
+      getState: () => settingsController.getDownloadState(),
+      setSource: source => settingsController.setDownloadSource(source),
+      testConnection: () => settingsController.testConnection(),
+    },
     onInstalled: runtime => {
       if (quitStarted) return
       runtimeState = readRuntimeState(app.getPath('userData'))
@@ -243,10 +313,18 @@ async function startApplication() {
   })
   updateManager.start()
   shellUpdateManager.start()
+  settingsController.refresh()
   await desktopWindow.loadShell()
   if (!mainWindow.isVisible()) mainWindow.show()
   if (selectedRuntime === undefined) await firstRunSetup.show()
   else startBackend(selectedRuntime)
+}
+
+function showClientSettings(section = 'harness') {
+  if (quitStarted) return
+  settingsController?.refresh()
+  settingsWindow?.show(section)
+  void settingsController?.inspectProxy()
 }
 
 /**
@@ -278,11 +356,11 @@ function startBackend(runtime) {
 
   const workspace = resolveWorkspacePath()
   mkdirSync(workspace, { recursive: true })
-  const environment = createBackendEnvironment(process.env)
+  const environment = createHarnessLaunchEnvironment(process.env)
   appendLog('desktop', `starting official Harness ${runtime.version} (${runtime.source}); requesting 127.0.0.1:${String(DESKTOP_PORT)}\n`)
   const child = spawn(
     runtime.nodePath,
-    [backendRunnerPath, cliPath, ...createHarnessWebArguments(runtime.version, DESKTOP_PORT)],
+    createHarnessLaunchArguments({ runnerPath: backendRunnerPath, cliPath, version: runtime.version, port: DESKTOP_PORT }),
     {
       cwd: workspace,
       env: environment,
@@ -292,6 +370,7 @@ function startBackend(runtime) {
   )
   backend = child
   selectedRuntime = runtime
+  settingsController?.refresh()
 
   backendExit = new Promise((resolve) => {
     child.once('close', (code, signal) => { resolve({ code, signal }) })
@@ -354,6 +433,7 @@ function acceptReadyUrl(readyUrl, child) {
   if (backend !== child || backendOrigin !== undefined || failureShown) return
   const ready = new URL(readyUrl)
   backendOrigin = ready.origin
+  settingsController?.refresh()
   clearStartupTimer()
   startupFailureHandling = false
   appendLog('desktop', `loading ${readyUrl}\n`)
@@ -642,7 +722,36 @@ app.on('before-quit', (event) => {
   if (mayQuit) return
   event.preventDefault()
   if (quitStarted) return
+  if (pluginManager?.recoveryRequired && !pluginRecoveryExitApproved) {
+    if (!pluginQuitNotice) {
+      pluginQuitNotice = dialog.showMessageBox({ type: 'warning', title: '插件进程需要检查',
+        message: '尚未确认插件进程已退出',
+        detail: '客户端可以退出，但后台可能仍有插件安装进程。请先核查运行日志及残留进程，避免重新打开后同时修改插件。',
+        buttons: ['仍然退出', '取消'], defaultId: 1, cancelId: 1, noLink: true,
+      }).then(choice => {
+        if (choice.response === 0) { pluginRecoveryExitApproved = true; app.quit() }
+      }).catch(() => { appendLog('plugins', 'could not show plugin recovery notice\n') })
+        .finally(() => { pluginQuitNotice = undefined })
+    }
+    return
+  }
+  if (pluginManager?.isBusy()) {
+    showClientSettings('plugins')
+    if (!pluginQuitNotice) {
+      pluginQuitNotice = dialog.showMessageBox({ type: 'info', title: '插件操作尚未结束',
+        message: '请等待插件操作结束后再退出',
+        detail: '官方插件命令正在处理依赖或等待确认。为避免中断后配置不完整，暂不退出；仍可关闭主窗口留在托盘。',
+      }).catch(() => { appendLog('plugins', 'could not show plugin shutdown notice\n') })
+        .finally(() => { pluginQuitNotice = undefined })
+    }
+    return
+  }
   quitStarted = true
+  pluginManager?.dispose()
+  settingsController?.dispose()
+  settingsWindow?.dispose()
+  settingsController = undefined
+  settingsWindow = undefined
   shellUpdateManager?.dispose()
   firstRunSetup?.dispose()
   firstRunSetup = undefined

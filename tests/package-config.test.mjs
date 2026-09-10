@@ -28,7 +28,7 @@ describe('desktop package configuration', () => {
     assert.match(manifest.scripts.start, /run stage:node && .*run stage:npm && electron \.$/u)
     assert.doesNotMatch(manifest.scripts['dist:win'], /build:lib|dsh-web-frontend|stage:runtime|smoke:runtime/u)
     assert.match(manifest.scripts['dist:win'], /npm test && npm run stage:node && npm run stage:npm/u)
-    assert.deepEqual(manifest.build.asarUnpack, ['src/**/*', 'assets/titlebar.*', 'assets/setup.*', 'assets/progress-meter.*', 'assets/shell-update.*', 'assets/icon.png', 'assets/terminal-bin/**/*'])
+    assert.deepEqual(manifest.build.asarUnpack, ['src/**/*', 'assets/titlebar.*', 'assets/setup.*', 'assets/settings.*', 'assets/progress-meter.*', 'assets/shell-update.*', 'assets/icon.png', 'assets/terminal-bin/**/*'])
     assert.deepEqual(manifest.build.files, ['src/**/*', 'assets/**/*', 'package.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/**/*'])
     assert.deepEqual(manifest.build.extraResources, [{
       from: 'build',
@@ -64,6 +64,13 @@ describe('desktop package configuration', () => {
       'assets/setup.css',
       'assets/progress-meter.css',
       'assets/progress-meter.js',
+      'src/settings-window.mjs',
+      'src/settings-preload.cjs',
+      'src/settings-controller.mjs',
+      'src/download-source.mjs',
+      'assets/settings.html',
+      'assets/settings.js',
+      'assets/settings.css',
     ]) {
       assert.doesNotThrow(() => readFileSync(resolve(desktopRoot, path)))
     }

@@ -58,6 +58,23 @@ describe('official runtime installer policy', () => {
     assert.throws(() => createNpmInstallEnvironment('http://user:password@proxy:8080'), /invalid/u)
   })
 
+  it('treats explicit system DIRECT as clearing inherited proxy variables only for the child', () => {
+    const source = {
+      HTTP_PROXY: 'http://stale:1', https_proxy: 'http://stale:2', All_Proxy: 'http://stale:3',
+      no_proxy: '*', Path: 'C:\\Windows\\System32',
+    }
+    const direct = createNpmInstallEnvironment(null, source)
+    assert.equal(Object.keys(direct).some(key => /^(?:HTTP|HTTPS|ALL|NO)_PROXY$/iu.test(key)), false)
+    assert.equal(direct.Path, source.Path)
+    assert.equal(source.HTTP_PROXY, 'http://stale:1')
+    const unknown = createNpmInstallEnvironment(undefined, source)
+    assert.equal(unknown.HTTP_PROXY, source.HTTP_PROXY)
+    assert.equal(unknown.no_proxy, '*')
+    const resolved = createNpmInstallEnvironment('http://127.0.0.1:18080', source)
+    assert.equal(resolved.no_proxy, undefined)
+    assert.equal(resolved.HTTPS_PROXY, 'http://127.0.0.1:18080')
+  })
+
   it('verifies package identity, exact root spec, and npm integrity', () => {
     const root = fixtureRuntime()
     assert.match(verifyReleaseInstallation(root, release).cliPath, /bin\.js$/u)

@@ -7,11 +7,16 @@ import { createProgressMeter } from './progress-meter.js'
   const refresh = document.getElementById('setup-refresh')
   const status = document.getElementById('setup-status')
   const reason = document.getElementById('setup-reason')
+  const source = document.getElementById('setup-source')
+  const sourceDetail = document.getElementById('setup-source-detail')
+  const sourceTest = document.getElementById('setup-source-test')
+  const sourceStatus = document.getElementById('setup-source-status')
   const renderProgress = createProgressMeter(document.getElementById('setup-progress'))
   const files = document.getElementById('setup-files')
   const timing = document.getElementById('setup-timing')
   let current
   let catalogKey = ''
+  let sourceKey = ''
 
   const renderTiming = () => {
     if (current?.status !== 'installing' && current?.status !== 'starting') {
@@ -25,6 +30,26 @@ import { createProgressMeter } from './progress-meter.js'
     current = value
     panel.hidden = !value.visible
     const busy = ['loading', 'installing', 'starting'].includes(value.status)
+    const sourceBusy = ['installing', 'starting'].includes(value.status) || value.downloadBusy || value.connectionTesting
+    const nextSourceKey = JSON.stringify(value.downloadSources)
+    if (nextSourceKey !== sourceKey) {
+      source.replaceChildren()
+      for (const item of value.downloadSources ?? []) {
+        const option = document.createElement('option')
+        option.value = item.id
+        option.textContent = item.label
+        source.append(option)
+      }
+      sourceKey = nextSourceKey
+    }
+    source.value = value.downloadSource ?? 'official'
+    source.disabled = sourceBusy || !value.downloadConfigurable
+    sourceTest.disabled = sourceBusy || !value.connectionTestAvailable
+    sourceTest.textContent = value.connectionTesting ? '检测中…' : '检测连接'
+    sourceDetail.textContent = value.downloadActivity || value.downloadSources?.find(item => item.id === source.value)?.description || ''
+    sourceStatus.hidden = !value.connectionTesting && !value.connectionResult
+    sourceStatus.textContent = value.connectionTesting ? '正在检测当前下载源，请稍候…' : (value.connectionResult?.message ?? '')
+    sourceStatus.dataset.result = value.connectionResult?.ok === false ? 'error' : 'normal'
     const nextKey = JSON.stringify(value.releases)
     if (nextKey !== catalogKey) {
       const selected = select.value
@@ -41,7 +66,7 @@ import { createProgressMeter } from './progress-meter.js'
     }
     if (value.version && busy && value.status !== 'loading') select.value = value.version
     select.disabled = busy || value.releases.length === 0
-    install.disabled = busy || value.releases.length === 0
+    install.disabled = busy || sourceBusy || value.releases.length === 0
     refresh.disabled = busy
     install.textContent = value.status === 'installing' ? '正在安装…' : value.status === 'starting' ? '正在启动…' : '安装并启动'
     status.textContent = value.detail
@@ -58,6 +83,14 @@ import { createProgressMeter } from './progress-meter.js'
     renderTiming()
   })
   const report = error => { status.textContent = error.message ?? String(error) }
+  const reportSource = error => {
+    source.value = current?.downloadSource ?? 'official'
+    sourceStatus.hidden = false
+    sourceStatus.dataset.result = 'error'
+    sourceStatus.textContent = error.message ?? String(error)
+  }
+  source.addEventListener('change', () => { void window.harnessSetup.setDownloadSource(source.value).catch(reportSource) })
+  sourceTest.addEventListener('click', () => { void window.harnessSetup.testConnection().catch(reportSource) })
   refresh.addEventListener('click', () => { void window.harnessSetup.refresh().catch(report) })
   install.addEventListener('click', () => { void window.harnessSetup.install(select.value).catch(report) })
   const timer = setInterval(renderTiming, 1000)

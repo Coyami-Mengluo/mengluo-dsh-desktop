@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { PassThrough } from 'node:stream'
 import { describe, it } from 'node:test'
 import {
   BACKEND_TREE_KILL_DELAY_MS,
   classifyNavigation,
   createBackendEnvironment,
+  createHarnessLaunchEnvironment,
   createHarnessWebArguments,
+  createHarnessLaunchArguments,
   observeHarnessOutput,
   parseReadyUrl,
   redactHarnessTokens,
@@ -17,6 +20,13 @@ import {
 } from '../src/runtime.mjs'
 
 describe('desktop backend readiness', () => {
+  it('runs the official CLI as the real Node entry after a URL-safe lifecycle preload', () => {
+    const runnerPath = join(process.cwd(), 'path with spaces', '监管.mjs')
+    const cliPath = join(process.cwd(), 'official', 'bin.js')
+    assert.deepEqual(createHarnessLaunchArguments({ runnerPath, cliPath, version: '0.1.5-rc.1', port: 0 }),
+      ['--import', pathToFileURL(runnerPath).href, cliPath, 'web', '--host', '127.0.0.1', '--port', '0', '--no-open'])
+    assert.throws(() => createHarnessLaunchArguments({ runnerPath: '', cliPath, version: '0.1.5-rc.1', port: 0 }))
+  })
   it('disables rc.8 browser auto-open without breaking older fallback slots', () => {
     assert.deepEqual(
       createHarnessWebArguments('0.1.0-rc.7', 47_821),
@@ -220,5 +230,13 @@ describe('desktop standalone Node runtime', () => {
     assert.equal(parent.Electron_Run_As_Node, '1')
     assert.equal(parent.FORCE_COLOR, '3')
     assert.equal(parent.no_color, '0')
+  })
+
+  it('stamps only the directly launched CLI environment with its desktop parent PID', () => {
+    const parent = { DSH_HOME: 'fixture', meng_luo_harness_parent_pid: 'stale', ELECTRON_RUN_AS_NODE: '1' }
+    const environment = createHarnessLaunchEnvironment(parent)
+    assert.deepEqual(environment, { DSH_HOME: 'fixture', NO_COLOR: '1', MENG_LUO_HARNESS_PARENT_PID: String(process.pid) })
+    assert.equal(parent.meng_luo_harness_parent_pid, 'stale')
+    assert.equal(parent.ELECTRON_RUN_AS_NODE, '1')
   })
 })

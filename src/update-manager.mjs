@@ -20,6 +20,7 @@ import { createBackendEnvironment, resolveWindowsTaskkillPath } from './runtime.
 import { createHarnessTerminalLaunch } from './runtime-terminal.mjs'
 import { isUpdateProgressStage, normalizeUpdateFileProgress } from './update-progress-window.mjs'
 import { PRODUCT_NAME } from './release-config.mjs'
+import { resolveDownloadSource } from './download-source.mjs'
 
 const PACKUMENT_URL = `${NPM_REGISTRY_ORIGIN}/@deepseek-ai%2Fdsh`
 const CHECK_TIMEOUT_MS = 15_000
@@ -43,6 +44,13 @@ export class HarnessUpdateManager {
     this.showWindow = options.showWindow
     this.onHarnessMenuChanged = options.onHarnessMenuChanged
     this.getClientMenuItems = options.getClientMenuItems ?? (() => [])
+    this.onSettingsRequested = options.onSettingsRequested ?? (() => {})
+    this.onSettingsChanged = options.onSettingsChanged
+    this.isPluginBusy = options.isPluginBusy ?? (() => false)
+    this.onProgressRequested = options.onProgressRequested ?? (() => { this.reportProgress('show') })
+    this.hasClientProgress = options.hasClientProgress ?? (() => false)
+    this.getDownloadSource = options.getDownloadSource ?? (() => 'official')
+    this.onDownloadStatus = options.onDownloadStatus
     this.getLogPath = options.getLogPath
     this.log = options.log
     this.requestRestart = options.requestRestart
@@ -69,6 +77,8 @@ export class HarnessUpdateManager {
     this.harnessPopupMenu = undefined
     this.activeHarnessPopupMenu = undefined
     this.disposed = false
+    this.progressAvailable = false
+    this.settingsError = undefined
   }
 
   /** Install the native menu and arm the first non-blocking check. */
@@ -131,6 +141,7 @@ export class HarnessUpdateManager {
       return
     }
     if (this.checkPromise === undefined) {
+      this.settingsError = undefined
       this.checkPromise = this.performCheck().finally(() => {
         this.checkPromise = undefined
         this.rebuildMenu()
@@ -143,6 +154,8 @@ export class HarnessUpdateManager {
       if (manual) await this.presentCheckResult(result)
       else this.prepareCheckResult(result)
     } catch (error) {
+      this.settingsError = '暂时无法检查 Harness 更新，请重试或查看日志。'
+      this.rebuildMenu()
       this.log(`update check failed: ${String(error)}\n`)
       if (manual) await this.showMessage({
         type: 'warning',
@@ -244,12 +257,13 @@ export class HarnessUpdateManager {
   }
 
   prepareRelease(release, { reportFailure, initial = false }) {
-    if (this.disposed || (!initial && this.currentRuntime === undefined)) return false
+    if (this.disposed || this.isPluginBusy() || (!initial && this.currentRuntime === undefined)) return false
     if (!initial && this.state.pendingVersion === release.version) return false
     if (this.installPromise !== undefined) {
       return false
     }
     this.preparingVersion = release.version
+    this.settingsError = undefined
     this.reportProgress('begin', release.version)
     this.installPromise = this.installRelease(release, { reportFailure, initial }).finally(() => {
       this.installPromise = undefined
@@ -289,7 +303,9 @@ export class HarnessUpdateManager {
     try {
       const controller = new AbortController()
       this.installAbort = controller
-      const proxy = await this.resolveSystemProxy('npm update')
+      const downloadSource = resolveDownloadSource(this.getDownloadSource())
+      const proxy = await this.resolveSystemProxy('npm update', new URL('@deepseek-ai%2Fdsh', downloadSource.registry).href)
+      const officialProxy = downloadSource.id === 'official' ? proxy : await this.resolveSystemProxy('official npm metadata')
       controller.signal.throwIfAborted()
       await this.runUpdate({
         executable: node.nodePath,
@@ -301,6 +317,11 @@ export class HarnessUpdateManager {
         currentNodeVersion: node.nodeVersion,
         currentNodeLicensePath: node.nodeLicensePath,
         proxy,
+        officialProxy,
+        downloadSource: downloadSource.id,
+        onDownloadStatus: status => {
+          if (!this.disposed) this.onDownloadStatus?.(status)
+        },
         log: text => { this.log(text) },
         onProgress: (stage, files) => {
           if (files === undefined) this.reportProgress('stage', stage, release.version)
@@ -323,6 +344,7 @@ export class HarnessUpdateManager {
       if (initial) return installed
       this.notifyReady(release)
     } catch (error) {
+      this.settingsError = 'Harness 安装或更新未完成，当前版本未被覆盖。可以重试或查看日志。'
       this.log(`update installation failed: ${String(error)}\n`)
       if (!this.disposed) this.reportProgress('fail', release.version)
       if (initial) throw error
@@ -343,6 +365,9 @@ export class HarnessUpdateManager {
   /** Keep the optional progress surface from affecting update correctness. */
   reportProgress(method, ...args) {
     if (this.disposed && method !== 'dispose') return
+    if (method === 'begin' || method === 'complete' || method === 'fail') this.progressAvailable = true
+    if (method === 'dispose') this.progressAvailable = false
+    this.notifySettingsChanged()
     try {
       if (this.currentRuntime === undefined && method !== 'dispose') {
         if (method === 'show') this.showWindow?.()
@@ -396,6 +421,7 @@ export class HarnessUpdateManager {
   }
 
   async promptRestart(release) {
+    if (this.disposed || this.isPluginBusy()) return
     const choice = await this.showMessage({
       type: 'info',
       title: 'Harness 更新',
@@ -406,7 +432,7 @@ export class HarnessUpdateManager {
       cancelId: 1,
       noLink: true,
     })
-    if (choice.response === 0) this.requestRestart()
+    if (choice.response === 0 && !this.disposed && !this.isPluginBusy()) this.requestRestart()
   }
 
   focusWindow() {
@@ -419,20 +445,21 @@ export class HarnessUpdateManager {
 
   /** Open a shell in the selected Harness runtime directory for local plugin operations. */
   async openRuntimeTerminal() {
-    if (this.disposed) return
+    if (this.disposed || this.isPluginBusy()) return
     if (this.currentRuntime === undefined) {
       this.onSetupRequested?.()
       return
     }
     try {
       const proxy = await this.resolveSystemProxy('Harness terminal')
+      if (this.disposed || this.isPluginBusy()) return
       const launch = createHarnessTerminalLaunch({
         runtime: this.currentRuntime,
         npmCliPath: this.npmCliPath,
         terminalBinPath: this.terminalBinPath,
         workspacePath: this.workspacePath,
         environment: this.terminalEnvironment,
-        proxy,
+        proxy: proxy ?? undefined,
       })
       const child = this.spawnTerminal(launch.command, launch.args, {
         ...launch.spawnOptions,
@@ -477,20 +504,20 @@ export class HarnessUpdateManager {
   }
 
   /** Resolve Chromium's Windows proxy choice for the npm registry with a bounded wait. */
-  async resolveSystemProxy(purpose) {
+  async resolveSystemProxy(purpose, url = PACKUMENT_URL) {
     const resolveProxy = this.electron.app?.resolveProxy
     if (typeof resolveProxy !== 'function') return undefined
     let timer
     try {
       const proxyRules = await Promise.race([
-        resolveProxy.call(this.electron.app, PACKUMENT_URL),
+        resolveProxy.call(this.electron.app, url),
         new Promise((_, reject) => {
           timer = setTimeout(() => { reject(new Error('system proxy resolution timed out')) }, PROXY_RESOLUTION_TIMEOUT_MS)
         }),
       ])
       const proxy = parseResolvedProxy(proxyRules)
       if (proxy !== undefined) this.log(`using the Windows system proxy for ${purpose}\n`)
-      return proxy
+      return proxy ?? (typeof proxyRules === 'string' && proxyRules.trim().toUpperCase() === 'DIRECT' ? null : undefined)
     } catch (error) {
       this.log(`system proxy resolution failed; npm will use its inherited network settings: ${String(error)}\n`)
       return undefined
@@ -530,100 +557,21 @@ export class HarnessUpdateManager {
 
   rebuildMenu() {
     if (this.disposed) return
-    const checking = this.checkPromise !== undefined
-    const installing = this.installPromise !== undefined
-    const installableRelease = this.availableRelease?.version === this.state.pendingVersion
-      ? undefined
-      : this.availableRelease
     const installed = this.currentRuntime !== undefined
-    const channel = installed ? resolveUpdateChannel(this.currentRuntime.version, this.state.channel) : 'latest'
-    const intervalItems = [
-      ['6h', '每 6 小时'],
-      ['24h', '每天'],
-      ['7d', '每周'],
-    ].map(([value, label]) => ({
-      label,
-      type: 'radio',
-      checked: this.state.interval === value,
-      click: () => { this.updatePreferences({ interval: value }) },
-    }))
-    const channelItems = [
-      { value: undefined, label: `自动（当前 ${channel}）` },
-      { value: 'latest', label: '稳定版（latest）' },
-      { value: 'next', label: '预览版（next）' },
-    ].map(item => ({
-      label: item.label,
-      type: 'radio',
-      checked: this.state.channel === item.value,
-      click: () => { this.updatePreferences({ channel: item.value }) },
-    }))
     const harnessMenuTemplate = [
-      ...this.getClientMenuItems(),
-      { label: installed ? `当前版本：${this.currentRuntime.version}` : '尚未安装 Harness', enabled: false },
-      {
-        label: checking ? '正在检查更新…' : installed ? '检查 Harness 更新…' : '选择并安装 Harness…',
-        enabled: !checking && !installing,
-        click: () => { void this.checkForUpdates({ manual: true }) },
-      },
-      ...(installing ? [{
-        label: `正在后台准备 ${this.preparingVersion ?? '更新'}…`,
-        enabled: false,
-      }, {
-        label: '显示更新进度…',
-        click: () => { this.reportProgress('show') },
-      }] : []),
       {
         label: '打开 Harness 终端…',
-        enabled: installed,
+        enabled: installed && !this.isPluginBusy(),
         click: () => { void this.openRuntimeTerminal() },
       },
-      ...(installableRelease === undefined || installing ? [] : [{
-        label: `后台准备 ${installableRelease.version}…`,
-        click: () => { this.prepareRelease(installableRelease, { reportFailure: true }) },
-      }]),
-      ...(!installed || this.state.pendingVersion === undefined ? [] : [{
-        label: `重启并应用 ${this.state.pendingVersion}`,
-        click: () => { this.requestRestart() },
-      }]),
-      { type: 'separator' },
-      {
-        label: '自动检查更新',
-        type: 'checkbox',
-        checked: this.state.autoCheck,
-        click: item => { this.updatePreferences({ autoCheck: item.checked }) },
-      },
-      { label: '检查频率', submenu: intervalItems },
-      { label: '更新通道', submenu: channelItems },
+      { label: '客户端设置…', click: () => { this.onSettingsRequested('harness') } },
+      ...(this.progressAvailable || this.hasClientProgress() ? [{
+        label: '查看更新进度…', click: () => { this.onProgressRequested() },
+      }] : []),
       { type: 'separator' },
       { label: '退出', role: 'quit' },
     ]
-    const template = [
-      {
-        label: 'Harness',
-        submenu: harnessMenuTemplate,
-      },
-      {
-        label: '帮助',
-        submenu: [
-          { label: 'DeepSeek Harness 官方项目', click: () => { this.openExternal(OFFICIAL_REPOSITORY) } },
-          {
-            label: '显示本次运行日志',
-            enabled: typeof this.getLogPath() === 'string' && existsSync(this.getLogPath()),
-            click: () => { this.electron.shell.showItemInFolder(this.getLogPath()) },
-          },
-          { type: 'separator' },
-          {
-            label: `关于 ${PRODUCT_NAME}`,
-            click: () => { void this.showMessage({
-              type: 'info',
-              title: `关于 ${PRODUCT_NAME}`,
-              message: PRODUCT_NAME,
-              detail: `适用于 DeepSeek Harness 的非官方 Windows 桌面客户端，与 DeepSeek 无隶属或背书关系。\n\nHarness：${this.currentRuntime?.version ?? '尚未安装'}\n客户端：${this.electron.app.getVersion()}`,
-            }) },
-          },
-        ],
-      },
-    ]
+    const template = [{ label: '客户端', submenu: harnessMenuTemplate }]
     this.harnessPopupMenu = this.electron.Menu.buildFromTemplate(harnessMenuTemplate)
     this.electron.Menu.setApplicationMenu(this.electron.Menu.buildFromTemplate(template))
     try {
@@ -633,10 +581,41 @@ export class HarnessUpdateManager {
     }
     const window = this.getWindow()
     if (window !== undefined && !window.isDestroyed()) window.setMenuBarVisibility(false)
+    this.notifySettingsChanged()
+  }
+
+  notifySettingsChanged() {
+    try { this.onSettingsChanged?.() } catch (error) {
+      this.log(`settings refresh failed: ${String(error)}\n`)
+    }
+  }
+
+  getSettingsState() {
+    const status = this.installPromise !== undefined || this.preparingVersion !== undefined ? 'installing'
+      : this.checkPromise !== undefined ? 'checking'
+        : this.state.pendingVersion !== undefined ? 'pending'
+          : this.settingsError ? 'error' : this.availableRelease ? 'available' : 'idle'
+    return {
+      installed: this.currentRuntime !== undefined, version: this.currentRuntime?.version,
+      status, availableVersion: this.availableRelease?.version, pendingVersion: this.state.pendingVersion,
+      autoCheck: this.state.autoCheck, interval: this.state.interval, channel: this.state.channel ?? 'auto',
+      progressAvailable: this.progressAvailable, error: this.settingsError,
+    }
   }
 
   updatePreferences(patch) {
-    this.persistState({ ...this.state, ...patch }, 'saving update preferences')
+    if (this.disposed || this.checkPromise !== undefined || this.installPromise !== undefined || this.preparingVersion !== undefined) throw new Error('请等待当前 Harness 操作结束后再修改设置')
+    if (patch === null || typeof patch !== 'object' || Array.isArray(patch)
+      || ![Object.prototype, null].includes(Object.getPrototypeOf(patch)) || Object.keys(patch).length === 0
+      || Object.keys(patch).some(key => !['autoCheck', 'interval', 'channel'].includes(key))
+      || ('autoCheck' in patch && typeof patch.autoCheck !== 'boolean')
+      || ('interval' in patch && (typeof patch.interval !== 'string' || !Object.hasOwn(UPDATE_INTERVAL_MS, patch.interval)))
+      || ('channel' in patch && ![undefined, 'latest', 'next'].includes(patch.channel))) throw new Error('无效的 Harness 更新设置')
+    const previous = this.state
+    if (!this.persistState({ ...this.state, ...patch }, 'saving update preferences')) {
+      this.state = previous
+      throw new Error('无法保存 Harness 更新设置')
+    }
     this.availableRelease = undefined
     this.rebuildMenu()
     this.scheduleAutomaticCheck(false)
@@ -733,6 +712,13 @@ export function runUpdateWorker(options) {
           options.log?.(`[update worker] progress callback failed: ${String(error)}\n`)
         }
       }
+      if (message.type === 'download-source' && message.status !== null && typeof message.status === 'object'
+        && ['official', 'npmmirror'].includes(message.status.source)
+        && typeof message.status.fallback === 'boolean' && typeof message.status.detail === 'string'
+        && message.status.detail.length <= 512) {
+        try { options.onDownloadStatus?.({ source: message.status.source, fallback: message.status.fallback, detail: message.status.detail }) }
+        catch (error) { options.log?.(`[update worker] download-status callback failed: ${String(error)}\n`) }
+      }
       if (message.type === 'complete') completed = true
       if (message.type === 'failed' && typeof message.error === 'string') failure = new Error(message.error)
     })
@@ -757,6 +743,8 @@ export function runUpdateWorker(options) {
         currentNodeVersion: options.currentNodeVersion,
         currentNodeLicensePath: options.currentNodeLicensePath,
         proxy: options.proxy,
+        officialProxy: options.officialProxy,
+        downloadSource: options.downloadSource,
       }, error => {
         if (error != null) {
           failure = error

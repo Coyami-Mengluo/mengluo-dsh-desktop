@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
@@ -14,12 +14,100 @@ afterEach(() => {
 })
 
 describe('native Harness update manager', () => {
+  it('blocks automatic and manual Harness preparation while a plugin operation holds the shared lock', async t => {
+    for (const manual of [false, true]) {
+      let pluginBusy = true
+      const harness = fixture({ isPluginBusy: () => pluginBusy })
+      t.after(() => harness.manager.dispose())
+      const release = { version: '0.1.0-rc.6', integrity: INTEGRITY }
+      assert.equal(harness.manager.prepareRelease(release, { reportFailure: manual }), false)
+      assert.equal(harness.manager.prepareRelease(release, { reportFailure: manual, initial: true }), false)
+      await harness.manager.checkForUpdates({ manual })
+      assert.equal(harness.requests, 1, 'Read-only metadata checks are still permitted')
+      assert.equal(harness.installs, 0)
+      assert.equal(harness.manager.installPromise, undefined)
+      assert.equal(harness.manager.preparingVersion, undefined)
+      assert.equal(harness.notifications.length, 0)
+      pluginBusy = false
+      assert.equal(harness.manager.prepareRelease(harness.manager.availableRelease, { reportFailure: manual }), true)
+      await harness.manager.installPromise
+      assert.equal(harness.installs, 1, 'Preparation can be explicitly retried after the plugin operation')
+    }
+  })
+
+  it('rechecks the plugin lock when an earlier automatic metadata request completes', async t => {
+    let pluginBusy = false
+    const metadata = promiseWithResolvers()
+    const harness = fixture({ isPluginBusy: () => pluginBusy, fetch: () => metadata.promise })
+    t.after(() => harness.manager.dispose())
+    const check = harness.manager.checkForUpdates({ manual: false })
+    pluginBusy = true
+    metadata.resolve(response(packument()))
+    await check
+    assert.equal(harness.installs, 0)
+    assert.equal(harness.manager.installPromise, undefined)
+    assert.equal(harness.manager.availableRelease.version, '0.1.0-rc.6')
+  })
+
+  it('prevents Harness restart before and after a native confirmation when plugins become busy', async t => {
+    let pluginBusy = true
+    let restarts = 0
+    const answer = promiseWithResolvers()
+    const harness = fixture({
+      isPluginBusy: () => pluginBusy, requestRestart: () => { restarts += 1 },
+      showMessage: () => answer.promise,
+    })
+    t.after(() => harness.manager.dispose())
+    const release = { version: '0.1.0-rc.6' }
+    await harness.manager.promptRestart(release)
+    assert.equal(harness.dialogs.length, 0)
+    pluginBusy = false
+    const prompt = harness.manager.promptRestart(release)
+    assert.equal(harness.dialogs.length, 1)
+    pluginBusy = true
+    answer.resolve({ response: 0 })
+    await prompt
+    assert.equal(restarts, 0)
+    pluginBusy = false
+    await harness.manager.promptRestart(release)
+    assert.equal(restarts, 1)
+  })
+
+  it('does not spawn a terminal if plugins become busy while system proxy resolution is pending', async t => {
+    let pluginBusy = true
+    let launches = 0
+    const proxy = promiseWithResolvers()
+    const harness = fixture({
+      isPluginBusy: () => pluginBusy, resolveProxy: () => proxy.promise,
+      spawnTerminal: () => { launches += 1; throw new Error('Terminal must not spawn while a plugin operation is active') },
+    })
+    t.after(() => harness.manager.dispose())
+    harness.manager.start()
+    assert.equal(harness.menu[0].submenu.find(item => item.label === '打开 Harness 终端…').enabled, false)
+    await harness.manager.openRuntimeTerminal()
+    assert.deepEqual(harness.proxyTargets, [])
+    pluginBusy = false
+    harness.manager.rebuildMenu()
+    assert.equal(harness.menu[0].submenu.find(item => item.label === '打开 Harness 终端…').enabled, true)
+    const terminal = harness.manager.openRuntimeTerminal()
+    assert.equal(harness.proxyTargets.length, 1)
+    pluginBusy = true
+    proxy.resolve('DIRECT')
+    await terminal
+    assert.equal(launches, 0)
+    assert.equal(harness.dialogs.length, 0, 'The late lock check occurs before creating or validating terminal launch paths')
+    assert.doesNotMatch(harness.logs.join(''), /failed to open Harness terminal/u)
+  })
+
   it('shows installation choices without automatic download or terminal access before setup', async () => {
     let shown = 0
     const harness = fixture({ uninstalled: true, onSetupRequested: () => { shown += 1 } })
     harness.manager.start()
     assert.equal(harness.manager.checkTimer, undefined)
-    assert.match(JSON.stringify(harness.menu), /尚未安装 Harness/u)
+    assert.equal(harness.manager.getSettingsState().installed, false)
+    assert.equal(harness.manager.getSettingsState().version, undefined)
+    assert.equal(harness.manager.getSettingsState().status, 'idle')
+    assert.deepEqual(harness.menu[0].submenu.map(item => item.label ?? item.type), ['打开 Harness 终端…', '客户端设置…', 'separator', '退出'])
     assert.equal(harness.menu[0].submenu.find(item => item.label === '打开 Harness 终端…').enabled, false)
     const versions = await harness.manager.fetchAvailableVersions()
     assert.equal(versions[0].version, '0.1.0-rc.6')
@@ -88,7 +176,9 @@ describe('native Harness update manager', () => {
     assert.notEqual(preparation, undefined)
     assert.equal(harness.notifications.length, 0)
     assert.equal(harness.dialogs.length, 0)
-    assert.match(JSON.stringify(harness.menu), /正在后台准备 0\.1\.0-rc\.6/u)
+    assert.equal(harness.manager.getSettingsState().status, 'installing')
+    assert.equal(harness.manager.getSettingsState().availableVersion, '0.1.0-rc.6')
+    assert.match(JSON.stringify(harness.menu), /查看更新进度/u)
 
     deferred.resolve()
     await preparation
@@ -96,7 +186,9 @@ describe('native Harness update manager', () => {
     assert.match(harness.notifications[0].body, /已完成校验和启动测试/u)
     assert.equal(harness.manager.state.pendingVersion, '0.1.0-rc.6')
     assert.doesNotMatch(JSON.stringify(harness.menu), /后台准备 0\.1\.0-rc\.6/u)
-    assert.match(JSON.stringify(harness.menu), /重启并应用 0\.1\.0-rc\.6/u)
+    assert.equal(harness.manager.getSettingsState().status, 'pending')
+    assert.equal(harness.manager.getSettingsState().pendingVersion, '0.1.0-rc.6')
+    assert.doesNotMatch(JSON.stringify(harness.menu), /重启并应用/u)
 
     await harness.manager.checkForUpdates({ manual: false })
     await harness.manager.dispose()
@@ -127,7 +219,9 @@ describe('native Harness update manager', () => {
     })
     assert.equal(received.currentNodeVersion, '24.19.0')
     assert.equal(received.currentNodeLicensePath, 'bundled-runtime/node-runtime/LICENSE')
-    assert.equal(received.proxy, undefined)
+    assert.equal(received.proxy, null)
+    assert.equal(received.officialProxy, null)
+    assert.equal(received.downloadSource, 'official')
     await harness.manager.dispose()
   })
 
@@ -142,6 +236,70 @@ describe('native Harness update manager', () => {
     assert.equal(received.proxy, 'http://127.0.0.1:18080')
     assert.match(harness.logs.join(''), /Windows system proxy/u)
     await harness.manager.dispose()
+  })
+
+  it('resolves PAC routing for the selected mirror and official metadata separately', async t => {
+    let received
+    const statuses = []
+    const harness = fixture({
+      getDownloadSource: () => 'npmmirror',
+      resolveProxy: async url => new URL(url).hostname === 'registry.npmmirror.com'
+        ? 'DIRECT' : 'PROXY 127.0.0.1:18080',
+      onDownloadStatus: status => { statuses.push(status) },
+      runUpdate: async options => {
+        received = options
+        options.onDownloadStatus({ source: 'npmmirror', fallback: false, detail: '镜像下载中' })
+      },
+    })
+    t.after(() => harness.manager.dispose())
+    await harness.manager.checkForUpdates({ manual: false })
+    await harness.manager.installPromise
+    assert.deepEqual(harness.proxyTargets, [
+      'https://registry.npmmirror.com/@deepseek-ai%2Fdsh',
+      'https://registry.npmjs.org/@deepseek-ai%2Fdsh',
+    ])
+    assert.deepEqual(harness.fetchUrls, ['https://registry.npmjs.org/@deepseek-ai%2Fdsh'])
+    assert.equal(received.downloadSource, 'npmmirror')
+    assert.equal(received.proxy, null)
+    assert.equal(received.officialProxy, 'http://127.0.0.1:18080')
+    assert.deepEqual(statuses, [{ source: 'npmmirror', fallback: false, detail: '镜像下载中' }])
+    await harness.manager.dispose()
+    received.onDownloadStatus({ source: 'official', fallback: true, detail: 'late status' })
+    assert.equal(statuses.length, 1)
+  })
+
+  it('resolves the official registry once and rejects unrecognized download sources before worker execution', async t => {
+    let received
+    const official = fixture({ runUpdate: async options => { received = options } })
+    t.after(() => official.manager.dispose())
+    await official.manager.checkForUpdates({ manual: false })
+    await official.manager.installPromise
+    assert.deepEqual(official.proxyTargets, ['https://registry.npmjs.org/@deepseek-ai%2Fdsh'])
+    assert.equal(received.proxy, received.officialProxy)
+    const invalid = fixture({ getDownloadSource: () => 'https://evil.example/npm' })
+    t.after(() => invalid.manager.dispose())
+    await invalid.manager.checkForUpdates({ manual: false })
+    await invalid.manager.installPromise
+    assert.equal(invalid.installs, 0)
+    assert.deepEqual(invalid.proxyTargets, [])
+    assert.equal(invalid.manager.getSettingsState().status, 'error')
+    assert.match(invalid.logs.join(''), /unsupported Harness download source/u)
+  })
+
+  it('passes the selected source to the very first install without changing official catalog retrieval', async t => {
+    let received
+    const harness = fixture({
+      uninstalled: true,
+      getDownloadSource: () => 'npmmirror',
+      runUpdate: async options => { received = options; createSealedSlot(options.userData, options.release.version) },
+    })
+    t.after(() => harness.manager.dispose())
+    const release = (await harness.manager.fetchAvailableVersions())[0]
+    await harness.manager.installInitialRelease(release)
+    assert.equal(received.downloadSource, 'npmmirror')
+    assert.equal(received.npm.source, 'installer')
+    assert.deepEqual(harness.fetchUrls, ['https://registry.npmjs.org/@deepseek-ai%2Fdsh'])
+    assert.equal(harness.proxyTargets[0], 'https://registry.npmmirror.com/@deepseek-ai%2Fdsh')
   })
 
   it('parses Chromium proxy rules without accepting credentials or missing ports', () => {
@@ -244,7 +402,7 @@ describe('native Harness update manager', () => {
     await harness.manager.checkForUpdates({ manual: false })
     const preparation = harness.manager.installPromise
     await new Promise(resolve => { setImmediate(resolve) })
-    const reopen = harness.menu[0].submenu.find(item => item.label === '显示更新进度…')
+    const reopen = harness.menu[0].submenu.find(item => item.label === '查看更新进度…')
     assert.equal(typeof reopen?.click, 'function')
     reopen.click()
     assert.deepEqual(timeline.slice(0, 7), [
@@ -320,9 +478,9 @@ describe('native Harness update manager', () => {
     assert.equal(harness.popups[0].options.x, 0)
     assert.equal(harness.popups[0].options.y, 44)
     assert.equal(typeof harness.popups[0].options.callback, 'function')
-    assert.match(JSON.stringify(harness.popups[0].menu), /检查 Harness 更新/u)
+    assert.match(JSON.stringify(harness.popups[0].menu), /客户端设置/u)
     assert.match(JSON.stringify(harness.popups[0].menu), /打开 Harness 终端/u)
-    assert.doesNotMatch(JSON.stringify(harness.popups[0].menu), /帮助|官方项目/u)
+    assert.doesNotMatch(JSON.stringify(harness.popups[0].menu), /帮助|官方项目|检查 Harness 更新|自动检查|更新频率|更新通道/u)
     assert.doesNotMatch(JSON.stringify(harness.popups[0].menu), /accelerator|CmdOrCtrl/u)
     assert.deepEqual(visibility, [false, false])
 
@@ -346,11 +504,163 @@ describe('native Harness update manager', () => {
     assert.deepEqual(trayMenus.at(-1), harness.menu[0].submenu)
     assert.equal(trayMenus.at(-1).at(-1).role, 'quit')
     harness.manager.updatePreferences({ autoCheck: false })
-    assert.equal(trayMenus.at(-1).find(item => item.label === '自动检查更新').checked, false)
+    assert.equal(harness.manager.getSettingsState().autoCheck, false)
+    assert.doesNotMatch(JSON.stringify(trayMenus.at(-1)), /自动检查更新/u)
     assert.equal(shows, 0)
     await harness.manager.showMessage({ type: 'info', message: 'fixture manual result' })
     assert.equal(shows, 1)
     assert.equal(harness.dialogs.at(-1).message, 'fixture manual result')
+  })
+
+  it('opens local settings from both concise menus without embedding switches or initiating network work', async t => {
+    const requested = []
+    const changes = []
+    const harness = fixture({
+      onSettingsRequested: section => { requested.push(section) },
+      onSettingsChanged: () => { changes.push('changed') },
+      getClientMenuItems: () => [{ label: 'legacy client updater item' }],
+    })
+    t.after(() => harness.manager.dispose())
+    harness.manager.start()
+    assert.equal(harness.menu[0].label, '客户端')
+    const submenu = harness.menu[0].submenu
+    assert.deepEqual(submenu.map(item => item.label ?? item.type), ['打开 Harness 终端…', '客户端设置…', 'separator', '退出'])
+    submenu.find(item => item.label === '客户端设置…').click()
+    assert.deepEqual(requested, ['harness'])
+    assert.equal(harness.requests, 0)
+    assert.equal(harness.installs, 0)
+    assert.ok(changes.length > 0)
+    assert.deepEqual(harness.manager.getSettingsState(), {
+      installed: true, version: '0.1.0-rc.5', status: 'idle',
+      availableVersion: undefined, pendingVersion: undefined,
+      autoCheck: true, interval: '24h', channel: 'auto',
+      progressAvailable: false, error: undefined,
+    })
+  })
+
+  it('adds one shared progress shortcut only when Harness or client progress is available', async t => {
+    let clientProgress = false
+    let requested = 0
+    const harness = fixture({ hasClientProgress: () => clientProgress, onProgressRequested: () => { requested += 1 } })
+    t.after(() => harness.manager.dispose())
+    harness.manager.start()
+    const progressItems = () => harness.menu[0].submenu.filter(item => item.label === '查看更新进度…')
+    assert.equal(progressItems().length, 0)
+    clientProgress = true
+    harness.manager.rebuildMenu()
+    assert.equal(progressItems().length, 1)
+    progressItems()[0].click()
+    assert.equal(requested, 1)
+    harness.manager.reportProgress('begin', '0.1.0-rc.6')
+    harness.manager.rebuildMenu()
+    assert.equal(progressItems().length, 1)
+    clientProgress = false
+    harness.manager.rebuildMenu()
+    assert.equal(progressItems().length, 1)
+    assert.equal(harness.manager.getSettingsState().progressAvailable, true)
+  })
+
+  it('persists only supported preferences and exposes the automatic channel without changing runtime selection', async t => {
+    const harness = fixture()
+    t.after(() => harness.manager.dispose())
+    harness.manager.start()
+    harness.manager.availableRelease = { version: '0.1.0-rc.6' }
+    harness.manager.updatePreferences({ autoCheck: false, interval: '7d', channel: 'latest' })
+    assert.equal(harness.manager.checkTimer, undefined)
+    const state = harness.manager.getSettingsState()
+    assert.equal(state.autoCheck, false)
+    assert.equal(state.interval, '7d')
+    assert.equal(state.channel, 'latest')
+    assert.equal(state.version, '0.1.0-rc.5')
+    assert.equal(state.availableVersion, undefined)
+    assert.equal(harness.installs, 0)
+    const persisted = JSON.parse(readFileSync(join(harness.userData, 'harness-runtime-state.json'), 'utf8'))
+    assert.equal(persisted.channel, 'latest')
+    assert.equal(persisted.autoCheck, false)
+    harness.manager.updatePreferences({ interval: '6h', channel: undefined })
+    assert.equal(harness.manager.getSettingsState().channel, 'auto')
+    assert.equal(harness.manager.getSettingsState().interval, '6h')
+    harness.manager.updatePreferences(Object.assign(Object.create(null), { autoCheck: false }))
+    const previous = harness.manager.state
+    for (const patch of [
+      null, [], {}, new Date(), 'invalid', Object.create({ autoCheck: false }),
+      Object.assign(new (class CustomPreferences {})(), { autoCheck: false }),
+      { autoCheck: 1 }, { autoCheck: 'false' },
+      { interval: 'monthly' }, { interval: 24 }, { interval: ['24h'] },
+      { interval: { toString: () => '24h' } }, { channel: 'auto' }, { channel: null },
+      { channel: 'nightly' }, { registry: 'https://evil.example' }, { activeVersion: '0.1.0-rc.6' },
+    ]) {
+      assert.throws(() => harness.manager.updatePreferences(patch), /无效/u)
+      assert.equal(harness.manager.state, previous)
+    }
+  })
+
+  it('rejects preference changes during checks, installation, and disposal, then allows retry', async t => {
+    const checking = promiseWithResolvers()
+    const installing = promiseWithResolvers()
+    const harness = fixture({ fetch: () => checking.promise, runUpdate: () => installing.promise })
+    t.after(() => harness.manager.dispose())
+    const check = harness.manager.checkForUpdates({ manual: false })
+    assert.equal(harness.manager.getSettingsState().status, 'checking')
+    assert.throws(() => harness.manager.updatePreferences({ autoCheck: false }), /等待/u)
+    checking.resolve(response(packument()))
+    await check
+    assert.equal(harness.manager.getSettingsState().status, 'installing')
+    assert.throws(() => harness.manager.updatePreferences({ channel: 'latest' }), /等待/u)
+    installing.resolve()
+    await harness.manager.installPromise
+    harness.manager.preparingVersion = '0.1.0-rc.6'
+    assert.equal(harness.manager.getSettingsState().status, 'installing')
+    assert.throws(() => harness.manager.updatePreferences({ interval: '6h' }), /等待/u)
+    harness.manager.preparingVersion = undefined
+    harness.manager.updatePreferences({ autoCheck: false })
+    assert.equal(harness.manager.getSettingsState().autoCheck, false)
+    await harness.manager.dispose()
+    assert.throws(() => harness.manager.updatePreferences({ autoCheck: true }), /等待/u)
+  })
+
+  it('rolls back failed preference persistence without reporting a successful settings change', async t => {
+    const changes = []
+    const harness = fixture({ onSettingsChanged: () => { changes.push('changed') } })
+    t.after(() => harness.manager.dispose())
+    harness.manager.start()
+    const previous = harness.manager.state
+    const timer = harness.manager.checkTimer
+    const available = { version: '0.1.0-rc.6' }
+    harness.manager.availableRelease = available
+    const count = changes.length
+    mkdirSync(join(harness.userData, 'harness-runtime-state.json'))
+    assert.throws(() => harness.manager.updatePreferences({ autoCheck: false, interval: '7d', channel: 'next' }), /无法保存/u)
+    assert.equal(harness.manager.state, previous)
+    assert.equal(harness.manager.checkTimer, timer)
+    assert.equal(harness.manager.availableRelease, available)
+    assert.equal(changes.length, count)
+    assert.match(harness.logs.join(''), /state write failed/u)
+  })
+
+  it('reports generic settings errors while retaining detailed diagnostics in the log', async t => {
+    const harness = fixture({ fetch: async () => { throw new Error('C:\\private\\network-detail') } })
+    t.after(() => harness.manager.dispose())
+    await harness.manager.checkForUpdates({ manual: false })
+    const state = harness.manager.getSettingsState()
+    assert.equal(state.status, 'error')
+    assert.match(state.error, /无法检查/u)
+    assert.doesNotMatch(state.error, /private|network-detail/u)
+    assert.match(harness.logs.join(''), /network-detail/u)
+  })
+
+  it('contains settings refresh failures without interrupting menus, updates, or preference saving', async t => {
+    const harness = fixture({ onSettingsChanged: () => { throw new Error('fixture settings UI unavailable') } })
+    t.after(() => harness.manager.dispose())
+    assert.doesNotThrow(() => harness.manager.start())
+    assert.doesNotThrow(() => harness.manager.reportProgress('stage', 'checking', '0.1.0-rc.6'))
+    await harness.manager.checkForUpdates({ manual: false })
+    await harness.manager.installPromise
+    assert.equal(harness.manager.getSettingsState().pendingVersion, '0.1.0-rc.6')
+    assert.doesNotThrow(() => harness.manager.updatePreferences({ autoCheck: false }))
+    assert.equal(harness.manager.getSettingsState().autoCheck, false)
+    assert.match(harness.logs.join(''), /settings refresh failed.*fixture settings UI unavailable/u)
+    assert.equal(harness.notifications.length, 1)
   })
 
   it('opens a separate Harness console in the workspace with exact command tooling', { skip: process.platform !== 'win32' }, async () => {
@@ -443,6 +753,8 @@ function fixture(options = {}) {
   let installs = 0
   let menu
   let fetchOptions
+  const fetchUrls = []
+  const proxyTargets = []
   const popups = []
   const popupCloses = []
   class FakeNotification {
@@ -458,13 +770,16 @@ function fixture(options = {}) {
   const electron = {
     app: {
       getVersion: () => '0.2.0',
-      resolveProxy: async () => options.proxyRules ?? 'DIRECT',
+      resolveProxy: async url => {
+        proxyTargets.push(url)
+        return options.resolveProxy === undefined ? options.proxyRules ?? 'DIRECT' : options.resolveProxy(url)
+      },
     },
     dialog: {
       showMessageBox: async (...args) => {
-        const options = args.at(-1)
-        dialogs.push(options)
-        return { response: options.type === 'question' ? 1 : 0 }
+        const message = args.at(-1)
+        dialogs.push(message)
+        return options.showMessage ? options.showMessage(message) : { response: message.type === 'question' ? 1 : 0 }
       },
     },
     Menu: {
@@ -477,10 +792,11 @@ function fixture(options = {}) {
       setApplicationMenu: value => { menu = value },
     },
     net: {
-      fetch: async (_url, init) => {
+      fetch: async (url, init) => {
         requests += 1
+        fetchUrls.push(url)
         fetchOptions = init
-        return response(packument())
+        return options.fetch === undefined ? response(packument()) : options.fetch(url, init)
       },
     },
     Notification: FakeNotification,
@@ -507,9 +823,17 @@ function fixture(options = {}) {
     getWindow: () => options.window,
     showWindow: options.showWindow,
     onHarnessMenuChanged: options.onHarnessMenuChanged,
+    getClientMenuItems: options.getClientMenuItems,
+    onSettingsRequested: options.onSettingsRequested,
+    onSettingsChanged: options.onSettingsChanged,
+    onProgressRequested: options.onProgressRequested,
+    hasClientProgress: options.hasClientProgress,
+    getDownloadSource: options.getDownloadSource,
+    onDownloadStatus: options.onDownloadStatus,
+    isPluginBusy: options.isPluginBusy,
     getLogPath: () => undefined,
     log: text => { logs.push(text) },
-    requestRestart: () => {},
+    requestRestart: options.requestRestart ?? (() => {}),
     openExternal: () => {},
     progressWindow: options.progressWindow,
     workspacePath: options.workspacePath ?? userData,
@@ -524,6 +848,7 @@ function fixture(options = {}) {
   })
   return {
     manager,
+    userData,
     dialogs,
     logs,
     notifications,
@@ -533,6 +858,8 @@ function fixture(options = {}) {
     get fetchOptions() { return fetchOptions },
     popups,
     popupCloses,
+    fetchUrls,
+    proxyTargets,
   }
 }
 

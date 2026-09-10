@@ -33,17 +33,30 @@ async function run() {
     fallbackSnapshot: fallbackTitlebarSnapshot, captureSnapshot: async () => fallbackTitlebarSnapshot(true),
     getBackendOrigin: () => undefined, openExternal: () => {},
   })
-  let attempts = 0, starts = 0, fetches = 0
+  let attempts = 0, starts = 0, fetches = 0, source = 'official', sourceChanges = 0, connectionTests = 0, downloadActivity = ''
   const releases = [{ version: '1.0.0', recommended: true, preview: false }, { version: '0.9.0', recommended: false, preview: false }]
   setup = createFirstRunSetup({
     ipcMain, window: desktop.window, htmlPath: join(application, 'assets', 'titlebar.html'),
     showLoading: () => { desktop.showLoading() },
+    downloadSettings: {
+      getState: () => ({ source, activity: downloadActivity }),
+      setSource: next => { assert.ok(['official', 'npmmirror'].includes(next)); source = next; sourceChanges += 1 },
+      testConnection: async () => { assert.equal(source, 'npmmirror'); connectionTests += 1; return { ok: true, message: 'npmmirror 连接正常（模拟检测）' } },
+    },
     onInstalled: runtime => { assert.equal(runtime.version, '0.9.0'); starts += 1; setup.complete() },
     updater: {
       fetchAvailableVersions: async () => { if (++fetches === 1) throw new Error('offline fixture'); return releases },
       installInitialRelease: async release => {
         attempts += 1
         assert.equal(release.version, '0.9.0')
+        assert.equal(source, 'npmmirror')
+        await expectDom("document.getElementById('setup-source').disabled && document.getElementById('setup-source-test').disabled")
+        downloadActivity = '镜像缺少此文件，已回退官方源下载。'
+        setup.refreshDownloadSettings()
+        await expectDom("document.getElementById('setup-source-detail').textContent.includes('回退官方源')")
+        downloadActivity = ''
+        setup.refreshDownloadSettings()
+        await expectDom("document.getElementById('setup-source-detail').textContent.includes('版本同步可能有延迟')")
         if (attempts === 1) {
           const activity = () => setup.progress('stage', 'installing', release.version, { completedFiles: 2, registryRequests: 98 })
           activity()
@@ -91,6 +104,21 @@ async function run() {
   writeFileSync(join(dirname(screenshot), 'caption-smoke.png'), (await desktop.window.webContents.capturePage({ x: captionWidth - 160, y: 0, width: 160, height: 44 })).toPNG())
   await setup.show()
   await expectDom("document.getElementById('setup-status').textContent.includes('offline fixture')")
+  await expectDom("document.getElementById('setup-source').options.length === 2 && !document.getElementById('setup-source').disabled")
+  await evaluate("document.getElementById('setup-source').value = 'npmmirror'; document.getElementById('setup-source').dispatchEvent(new Event('change'))")
+  await expectDom("document.getElementById('setup-source').value === 'npmmirror' && !document.getElementById('setup-source').disabled")
+  assert.equal(source, 'npmmirror')
+  assert.equal(sourceChanges, 1)
+  assert.equal(attempts, 0)
+  await evaluate("document.getElementById('setup-source-test').click()")
+  await expectDom("document.getElementById('setup-source-status').textContent.includes('连接正常')")
+  assert.equal(connectionTests, 1)
+  source = 'official'
+  setup.refreshDownloadSettings()
+  await expectDom("document.getElementById('setup-source').value === 'official' && document.getElementById('setup-source-status').hidden")
+  source = 'npmmirror'
+  setup.refreshDownloadSettings()
+  await expectDom("document.getElementById('setup-source').value === 'npmmirror'")
   trace.push('offline:retry-visible')
   await evaluate("document.getElementById('setup-refresh').click()")
   await expectDom("document.getElementById('setup-version').options.length === 2")

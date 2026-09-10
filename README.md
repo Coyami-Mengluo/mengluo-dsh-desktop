@@ -6,16 +6,48 @@ An unofficial, personal-maintainer Windows desktop client for [DeepSeek Harness]
 
 ## Install and use
 
-Download the **setup.exe** from [GitHub Releases](https://github.com/Coyami-Mengluo/mengluo-dsh-desktop/releases/latest). The first launch asks you to choose an official Harness version and installs its production dependencies from the official npm registry. An existing verified installation is reused. The installer includes Electron, installation Node and npm, but not Harness itself. Windows x64 is the supported platform. Unsigned preview builds can trigger SmartScreen warnings.
+Download the **setup.exe** from [GitHub Releases](https://github.com/Coyami-Mengluo/mengluo-dsh-desktop/releases/latest). The first launch asks you to choose an official Harness version and a download source: official npm (the default) or the third-party npmmirror service. Version information always comes from official npm. An existing verified installation is reused. The installer includes Electron, installation Node and npm, but not Harness itself. Windows x64 is the supported platform. Unsigned preview builds can trigger SmartScreen warnings.
 
 Closing the main window hides it to the tray. Right-click the tray, or press **Ctrl+Alt+U**, for the menu; choose **Quit** to stop the client and Harness. The menu also opens a terminal with the selected Harness runtime's Node and `dsh`, plus pinned npm/npx/pnpm tooling. Git is available only if installed on Windows.
 
+The short menu contains **Open Harness terminal**, **Client settings**, and **Quit**; the tray also provides **Show main window**. **View update progress** appears when progress is available. Closing the separate settings window hides it without stopping Harness.
+
 The transparent application icon is AI-generated artwork supplied by the maintainer, not an official DeepSeek logo. Artwork provenance and its separate terms are in [the artwork notice](assets/ARTWORK.md). The original MIT geometric SVG is retained as an alternative.
+
+## Client settings and download sources
+
+Open **Client settings** from the tray or **Ctrl+Alt+U** menu. It has five sections:
+
+- **Harness:** current version, installation and updates, update channel, automatic checking and its interval. Automatic Harness checks retain the existing behavior: a discovered update can be downloaded and verified in the background, then you are asked to restart before switching to it.
+- **Plugins:** a community discovery list and management of user-added plugins in Harness's `web` profile, with read-only update checks and user-confirmed installation, updates and removal.
+- **Downloads & network:** Harness download source, connection checks, and the detected system proxy status.
+- **Client updates:** the desktop client version, manual checks, daily automatic checking, download progress and confirmed restart/install.
+- **About & logs:** project links, version and license information, and the log shortcut.
+
+The first-install page and network settings share one per-user `download-settings.json` file in the application's profile. Source changes apply to future managed Harness installations and updates, not an in-progress task. They do not change global npm settings, the Harness terminal's npm configuration, Git plugin downloads, or the client's GitHub update feed.
+
+Selecting npmmirror changes only the transport for npm package files. The client first obtains the exact version, dependency graph and SHA-512 integrity values from official npm, then downloads the locked package files through the mirror. A mirror connection failure or missing file can fall back to official npm for the same locked version and dependencies, within the existing timeout budget. Integrity failures are not bypassed; a failed candidate is not activated or silently replaced with an older version.
+
+npmmirror is a third-party service and may lag behind official releases. It is not a guaranteed speedup: official metadata must still be reachable, and dependency resolution, disk verification and startup checks still take time. The connection check reports connectivity and response time, not actual download throughput or whether a target version has synchronized. These settings do not alter the official Harness UI.
+
+## Plugins
+
+**Client settings → Plugins** has a store and an installed-plugin view. The store searches public, non-archived, non-fork repositories carrying GitHub's [`dsh-plugin` topic](https://github.com/topics/dsh-plugin), ordered by recent updates. Keywords are sent to GitHub's repository search across names, descriptions and READMEs, rather than filtering only the currently loaded list. Results load in pages of up to 100; use **Load more** for subsequent pages. GitHub exposes at most 1,000 results per search and may return incomplete results, so narrow the keywords when prompted. Repositories without this topic are outside the store's search scope.
+
+Search input is debounced and recent query pages are cached to reduce anonymous API requests. Changing a query cancels or ignores stale responses so they cannot overwrite the newer results. A topic, listing or declared bundle is **not a security or compatibility certification**. Review the author, source, permissions, dependencies and license before installing; third-party plugins can execute code. Root packages that cannot be confirmed as installable Harness bundles require the author's manual installation instructions instead.
+
+Entering the plugin page or choosing to check updates reads public metadata only. Plugins are never automatically updated in the background. An installation, update or removal requires an explicit button click and confirmation, then uses the selected runtime's official Harness plugin CLI. npm updates target an exact package version; store installations and GitHub updates target an exact commit. Official built-in components are not managed by these controls. The client prevents plugin changes from overlapping its Harness update tasks; do not change the same profile simultaneously in an external terminal or the official UI.
+
+The installed view manages user-added plugins in the `web` profile. A GitHub plugin installed through this store records the selected branch and exact commit for future checks. Existing GitHub installs with no reliable installed commit or tracking ref, local packages and other unsupported sources show an unknown update state rather than guessing a target. Compatibility remains unknown unless a declaration is available; an author's declared version range is not a runtime compatibility test.
+
+Plugin tasks use the system proxy, show stage/activity information and bounded recent output, and have a 30-minute timeout. They do not invent a download percentage when the official CLI provides no reliable total. The Harness mirror selector applies only to managed Harness runtime downloads: it does not change a plugin's registry, global npm configuration or GitHub source.
+
+The client keeps minimal plugin-source bookkeeping (`plugin-sources.json`: package/spec, repository, tracking ref and commit) in its application profile, not in the official plugin configuration. It contains no credentials. Checking the store or updates sends search keywords and relevant public repository or npm package names to GitHub's API or official npm through the system proxy, without account credentials; it does not upload conversations or plugin configuration. Do not enter secrets in the store's search box. See [the plugin security boundary](SECURITY.md#plugin-boundary).
 
 ## Two separate update paths
 
-- **Client updates:** check this repository's stable GitHub Releases automatically once a day, or manually from the menu. Download and restart both require confirmation. The installed NSIS client prefers differential downloads and falls back to a full installer if the required cache, old blockmap, or HTTP range support is unavailable. The progress window shows measured transferred bytes, speed, percentage and an estimate when available. Ordinary application exit never installs a pending update automatically. Portable/development builds link to the release page instead of replacing themselves.
-- **Harness updates:** continue to install one exact official npm version and its complete production dependencies into an isolated runtime slot, then verify and smoke-test it before switching. This path does not use GitHub client updates and is not differential. The existing 30-minute npm timeout remains.
+- **Client updates:** check this repository's stable GitHub Releases automatically once a day, or manually from **Client settings → Client updates**. Download and restart both require confirmation. The installed NSIS client prefers differential downloads and falls back to a full installer if the required cache, old blockmap, or HTTP range support is unavailable. The progress window shows measured transferred bytes, speed, percentage and an estimate when available. Ordinary application exit never installs a pending update automatically. Portable/development builds link to the release page instead of replacing themselves.
+- **Harness updates:** install one exact official npm version and its complete production dependencies into an isolated runtime slot, using the selected package-file download source, then verify and smoke-test it before a confirmed restart switches versions. Automatic checking can prepare this candidate in the background. This path does not use GitHub client updates and is not differential. npm preparation, mirror downloads and an official-source retry share the existing 30-minute timeout budget.
 
 Client installers replace application files, not the per-user Harness runtime slots, plugins or conversations. A confirmed client restart stops current Harness tasks; finish them first. Existing private-client profiles and workspaces are reused when no new profile exists. Upstream Harness can change its own data formats; this project cannot guarantee compatibility with every future release or migrate undocumented formats.
 

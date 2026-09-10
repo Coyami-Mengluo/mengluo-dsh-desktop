@@ -37,6 +37,177 @@ describe('first-install version catalog', () => {
 })
 
 describe('local first-run setup controller', () => {
+  it('defaults to the official source without requiring new integration callbacks', async () => {
+    const f = fixture()
+    await f.setup.show()
+    assert.equal(f.setup.state.downloadSource, 'official')
+    assert.equal(f.setup.state.downloadConfigurable, false)
+    assert.deepEqual(f.setup.state.downloadSources.map(source => source.id), ['official', 'npmmirror'])
+    await assert.rejects(f.action({ type: 'download-source', source: 'npmmirror' }), /无法修改/u)
+    f.setup.dispose()
+  })
+  it('uses shared persisted source settings, including after catalog errors and cross-view changes', async () => {
+    let source = 'official'
+    let networkBusy = false
+    const changes = []
+    const downloadSettings = {
+      getState: () => ({ source, busy: networkBusy }),
+      setSource: next => { source = next; changes.push(next) },
+    }
+    const f = fixture({ downloadSettings, fetch: async () => { throw new Error('offline') } })
+    await f.setup.show()
+    assert.equal(f.setup.state.status, 'error')
+    await f.action({ type: 'download-source', source: 'npmmirror' })
+    assert.equal(f.setup.state.downloadSource, 'npmmirror')
+    assert.deepEqual(changes, ['npmmirror'])
+    assert.deepEqual(f.installs, [])
+    source = 'official'
+    networkBusy = true
+    f.setup.refreshDownloadSettings()
+    assert.equal(f.setup.state.downloadSource, 'official')
+    assert.equal(f.setup.state.downloadBusy, true)
+    await assert.rejects(f.action({ type: 'download-source', source: 'npmmirror' }), /正在进行/u)
+    networkBusy = false
+    await f.action({ type: 'download-source', source: 'npmmirror' })
+    f.setup.dispose()
+    const reopened = fixture({ downloadSettings })
+    await reopened.setup.show()
+    assert.equal(reopened.setup.state.downloadSource, 'npmmirror')
+    reopened.setup.dispose()
+  })
+  it('publishes shared download and fallback activity without changing the selected source', async () => {
+    let activity = ''
+    const installing = Promise.withResolvers()
+    const f = fixture({
+      downloadSettings: { getState: () => ({ source: 'npmmirror', activity }), setSource: () => {} },
+      install: () => installing.promise,
+    })
+    await f.setup.show()
+    assert.equal(f.setup.state.downloadActivity, '')
+    const pending = f.action({ type: 'install', version: '1.0.0' })
+    activity = 'npmmirror 缺少此文件，正在回退官方源下载。'
+    f.setup.refreshDownloadSettings()
+    assert.equal(f.setup.state.downloadActivity, activity)
+    assert.equal(f.setup.state.downloadSource, 'npmmirror')
+    assert.equal(f.setup.state.status, 'installing')
+    activity = ''
+    f.setup.refreshDownloadSettings()
+    assert.equal(f.setup.state.downloadActivity, '')
+    installing.resolve({ version: '1.0.0' })
+    await pending
+    f.setup.dispose()
+  })
+  it('rejects unknown sources, expanded requests, hidden UI, and untrusted frames', async () => {
+    const changes = []
+    const f = fixture({ downloadSettings: { getState: () => ({ source: 'official' }), setSource: source => { changes.push(source) } } })
+    await assert.rejects(f.action({ type: 'download-source', source: 'npmmirror' }), /首次安装/u)
+    await f.setup.show()
+    for (const source of ['custom', 'https://evil.example', '../npm']) {
+      await assert.rejects(f.action({ type: 'download-source', source }), /不支持/u)
+    }
+    await assert.rejects(f.action({ type: 'download-source', source: 'npmmirror', registry: 'https://evil.example' }), /不支持/u)
+    await assert.rejects(f.action({ type: 'test-connection', source: 'npmmirror' }), /不支持/u)
+    for (const request of [{ type: 'download-source', source: 'npmmirror' }, { type: 'test-connection' }]) {
+      for (const event of [
+        { ...f.event, sender: {} },
+        { ...f.event, senderFrame: { url: f.url } },
+      ]) await assert.rejects(f.action(request, event), /不是来自/u)
+      f.event.senderFrame.url = 'https://official.example'
+      await assert.rejects(f.action(request), /不是来自/u)
+      f.event.senderFrame.url = f.url
+    }
+    assert.deepEqual(changes, [])
+    f.setup.dispose()
+  })
+  it('locks source changes during installation, shared work, and asynchronous persistence', async () => {
+    const saving = Promise.withResolvers()
+    const installing = Promise.withResolvers()
+    let source = 'official'
+    let sharedBusy = false
+    const f = fixture({
+      downloadSettings: {
+        getState: () => ({ source, busy: sharedBusy }),
+        setSource: async next => { await saving.promise; source = next },
+      },
+      install: () => installing.promise,
+    })
+    await f.setup.show()
+    const switching = f.action({ type: 'download-source', source: 'npmmirror' })
+    assert.equal(f.setup.state.downloadBusy, true)
+    await assert.rejects(f.action({ type: 'download-source', source: 'official' }), /正在进行/u)
+    await f.action({ type: 'install', version: '1.0.0' })
+    assert.deepEqual(f.installs, [])
+    saving.resolve()
+    await switching
+    assert.equal(f.setup.state.downloadBusy, false)
+    sharedBusy = true
+    await assert.rejects(f.action({ type: 'install', version: '1.0.0' }), /正在进行/u)
+    sharedBusy = false
+    const pending = f.action({ type: 'install', version: '1.0.0' })
+    await assert.rejects(f.action({ type: 'download-source', source: 'official' }), /正在进行/u)
+    installing.resolve({ version: '1.0.0' })
+    await pending
+    await assert.rejects(f.action({ type: 'download-source', source: 'official' }), /正在进行/u)
+    f.setup.dispose()
+  })
+  it('tests only the selected source and clears stale results after source changes', async () => {
+    let source = 'npmmirror'
+    const checking = Promise.withResolvers()
+    const f = fixture({ downloadSettings: {
+      getState: () => ({ source }),
+      setSource: next => { source = next },
+      testConnection: async () => { assert.equal(source, 'npmmirror'); return checking.promise },
+    } })
+    await f.setup.show()
+    const pending = f.action({ type: 'test-connection' })
+    assert.equal(f.setup.state.connectionTesting, true)
+    await assert.rejects(f.action({ type: 'download-source', source: 'official' }), /正在进行/u)
+    await f.action({ type: 'install', version: '1.0.0' })
+    assert.deepEqual(f.installs, [])
+    checking.resolve({ ok: true, message: 'npmmirror 连接正常（123 ms）' })
+    await pending
+    assert.deepEqual(f.setup.state.connectionResult, { ok: true, message: 'npmmirror 连接正常（123 ms）' })
+    assert.equal(f.setup.state.connectionTesting, false)
+    source = 'official'
+    f.setup.refreshDownloadSettings()
+    assert.equal(f.setup.state.connectionResult, undefined)
+    f.setup.dispose()
+  })
+  it('unlocks after a failed source save and ignores late connection results after disposal', async () => {
+    const checking = Promise.withResolvers()
+    const f = fixture({ downloadSettings: {
+      getState: () => ({ source: 'official' }),
+      setSource: () => { throw new Error('settings write failed') },
+      testConnection: () => checking.promise,
+    } })
+    await f.setup.show()
+    await assert.rejects(f.action({ type: 'download-source', source: 'npmmirror' }), /settings write failed/u)
+    assert.equal(f.setup.state.downloadSource, 'official')
+    assert.equal(f.setup.state.downloadBusy, false)
+    const pending = f.action({ type: 'test-connection' })
+    f.setup.dispose()
+    const sentCount = f.sent.length
+    checking.resolve({ ok: true, message: 'late result' })
+    await pending
+    assert.equal(f.sent.length, sentCount)
+  })
+  it('makes connection errors retryable without changing the installation state', async () => {
+    let fail = true
+    const f = fixture({ downloadSettings: {
+      getState: () => ({ source: 'official' }), setSource: () => {},
+      testConnection: async () => { if (fail) throw new Error('connection timeout'); return { ok: true, message: '连接正常' } },
+    } })
+    await f.setup.show()
+    await f.action({ type: 'test-connection' })
+    assert.equal(f.setup.state.connectionResult.ok, false)
+    assert.match(f.setup.state.connectionResult.message, /connection timeout/u)
+    assert.equal(f.setup.state.connectionTesting, false)
+    assert.equal(f.setup.state.status, 'ready')
+    fail = false
+    await f.action({ type: 'test-connection' })
+    assert.equal(f.setup.state.connectionResult.ok, true)
+    f.setup.dispose()
+  })
   it('waits for explicit selection and only installs a version from the fetched catalog', async () => {
     const f = fixture()
     await f.setup.show()
@@ -134,6 +305,7 @@ function fixture(options = {}) {
   const setup = createFirstRunSetup({
     ipcMain: ipc, window: { isDestroyed: () => false, webContents }, htmlPath,
     showLoading: () => {}, onInstalled: runtime => { started.push(runtime.version) },
+    downloadSettings: options.downloadSettings,
     updater: {
       fetchAvailableVersions: options.fetch ?? (async () => listDshReleases(packument())),
       installInitialRelease: async release => {

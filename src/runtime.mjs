@@ -1,4 +1,5 @@
-import { join, win32 } from 'node:path'
+import { join, resolve, win32 } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { createInterface } from 'node:readline'
 import { compareSemver } from './update-policy.mjs'
 
@@ -27,6 +28,14 @@ export function createHarnessWebArguments(version, port) {
   const args = ['web', '--host', '127.0.0.1', '--port', String(port)]
   if (compareSemver(version, NO_OPEN_MINIMUM_VERSION) >= 0) args.push('--no-open')
   return args
+}
+
+/** Load only lifecycle supervision first; the untouched official CLI remains Node's real entry point. */
+export function createHarnessLaunchArguments({ runnerPath, cliPath, version, port }) {
+  if (typeof runnerPath !== 'string' || runnerPath.length === 0 || typeof cliPath !== 'string' || cliPath.length === 0) {
+    throw new Error('Harness launch requires the lifecycle preload and official CLI paths')
+  }
+  return ['--import', pathToFileURL(resolve(runnerPath)).href, cliPath, ...createHarnessWebArguments(version, port)]
 }
 
 /**
@@ -88,6 +97,16 @@ export function createBackendEnvironment(environment = process.env) {
     }
   }
   result.NO_COLOR = '1'
+  return result
+}
+
+/** Opt only the directly spawned official CLI into desktop lifetime supervision. */
+export function createHarnessLaunchEnvironment(environment = process.env) {
+  const result = createBackendEnvironment(environment)
+  for (const key of Object.keys(result)) {
+    if (key.toUpperCase() === 'MENG_LUO_HARNESS_PARENT_PID') delete result[key]
+  }
+  result.MENG_LUO_HARNESS_PARENT_PID = String(process.pid)
   return result
 }
 

@@ -7,6 +7,12 @@ export const SETUP_IPC = Object.freeze({
   action: 'mengluo:setup:action',
 })
 
+const DOWNLOAD_SOURCE_IDS = new Set(['official', 'npmmirror'])
+const DEFAULT_DOWNLOAD_SOURCES = Object.freeze([
+  Object.freeze({ id: 'official', label: '官方 npm', description: '直接从 npm 官方发布源下载。' }),
+  Object.freeze({ id: 'npmmirror', label: 'npmmirror（第三方国内镜像）', description: '可能改善国内 npm 下载速度，版本同步可能有延迟。' }),
+])
+
 /** Own the local-only first-install screen; only catalog versions can cross into installation. */
 export function createFirstRunSetup(options) {
   const { ipcMain, window, updater } = options
@@ -14,11 +20,32 @@ export function createFirstRunSetup(options) {
   let disposed = false
   let catalog = []
   let refreshPromise
-  let state = Object.freeze({ visible: false, status: 'idle', releases: [], detail: '', reason: '' })
+  let sourceChanging = false
+  let connectionTesting = false
+  const readDownloadSettings = () => {
+    const value = options.downloadSettings?.getState?.() ?? {}
+    return {
+      downloadSource: DOWNLOAD_SOURCE_IDS.has(value.source) ? value.source : 'official',
+      downloadSources: DEFAULT_DOWNLOAD_SOURCES.map(fallback => {
+        const source = value.sources?.find(item => item.id === fallback.id)
+        return Object.freeze({
+          id: fallback.id,
+          label: typeof source?.label === 'string' ? source.label : fallback.label,
+          description: typeof source?.description === 'string' ? source.description : fallback.description,
+        })
+      }),
+      downloadBusy: value.busy === true || sourceChanging,
+      downloadActivity: typeof value.activity === 'string' ? value.activity.slice(0, 512) : '',
+      downloadConfigurable: typeof options.downloadSettings?.setSource === 'function',
+      connectionTestAvailable: typeof options.downloadSettings?.testConnection === 'function',
+      connectionTesting,
+    }
+  }
+  let state = Object.freeze({ visible: false, status: 'idle', releases: [], detail: '', reason: '', ...readDownloadSettings() })
   const busy = () => state.status === 'installing' || state.status === 'starting'
   const publish = patch => {
     if (disposed) return
-    state = Object.freeze({ ...state, ...patch })
+    state = Object.freeze({ ...state, ...readDownloadSettings(), ...patch })
     if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
       window.webContents.send(SETUP_IPC.state, state)
     }
@@ -53,7 +80,8 @@ export function createFirstRunSetup(options) {
   }
 
   const install = async version => {
-    if (!state.visible || busy() || refreshPromise !== undefined) return
+    if (!state.visible || busy() || refreshPromise !== undefined || sourceChanging || connectionTesting) return
+    if (readDownloadSettings().downloadBusy) throw new Error('下载任务正在进行，请稍后安装')
     const release = catalog.find(candidate => candidate.version === version)
     if (release === undefined) throw new Error('请选择列表中的官方 Harness 版本')
     publish({ status: 'installing', version, reason: '', startedAt: Date.now(), files: undefined, percent: undefined, detail: '正在准备安装…' })
@@ -69,11 +97,47 @@ export function createFirstRunSetup(options) {
   const handleReady = event => {
     if (trusted(event)) publish({})
   }
+  const assertDownloadIdle = () => {
+    if (!state.visible) throw new Error('请先打开首次安装界面')
+    if (busy() || sourceChanging || connectionTesting || readDownloadSettings().downloadBusy) {
+      throw new Error('安装或下载任务正在进行，暂时不能切换或检测下载源')
+    }
+  }
+  const setDownloadSource = async source => {
+    if (!DOWNLOAD_SOURCE_IDS.has(source)) throw new Error('不支持的 Harness 下载源')
+    assertDownloadIdle()
+    if (typeof options.downloadSettings?.setSource !== 'function') throw new Error('当前无法修改下载源')
+    sourceChanging = true
+    publish({ connectionResult: undefined })
+    try {
+      await options.downloadSettings.setSource(source)
+    } finally {
+      sourceChanging = false
+      publish({})
+    }
+  }
+  const testConnection = async () => {
+    assertDownloadIdle()
+    if (typeof options.downloadSettings?.testConnection !== 'function') throw new Error('当前无法检测下载源连接')
+    connectionTesting = true
+    publish({ connectionResult: undefined })
+    try {
+      const result = await options.downloadSettings.testConnection()
+      publish({ connectionResult: { ok: result?.ok === true, message: String(result?.message ?? '连接检测已完成') } })
+    } catch (error) {
+      publish({ connectionResult: { ok: false, message: `连接检测失败：${error.message ?? String(error)}` } })
+    } finally {
+      connectionTesting = false
+      publish({})
+    }
+  }
   const handleAction = async (event, request) => {
     if (!trusted(event)) throw new Error('安装请求不是来自客户端设置界面')
     if (request === null || typeof request !== 'object' || Array.isArray(request)) throw new Error('无效的安装请求')
     if (request.type === 'refresh' && Object.keys(request).length === 1) await refresh()
     else if (request.type === 'install' && Object.keys(request).length === 2 && typeof request.version === 'string') await install(request.version)
+    else if (request.type === 'download-source' && Object.keys(request).length === 2 && typeof request.source === 'string') await setDownloadSource(request.source)
+    else if (request.type === 'test-connection' && Object.keys(request).length === 1) await testConnection()
     else throw new Error('不支持的安装操作')
   }
   ipcMain.on(SETUP_IPC.ready, handleReady)
@@ -93,6 +157,10 @@ export function createFirstRunSetup(options) {
     },
     complete() {
       publish({ visible: false, status: 'idle' })
+    },
+    refreshDownloadSettings() {
+      const next = readDownloadSettings()
+      publish(next.downloadSource !== state.downloadSource ? { connectionResult: undefined } : {})
     },
     progress(method, ...args) {
       if (disposed || state.status !== 'installing') return

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'">
+  <title>客户端设置</title>
+  <link rel="stylesheet" href="./settings.css">
+  <script src="./settings.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><img src="./icon.png" width="38" height="38" alt=""><div><strong>客户端设置</strong><span>MengLuo DSH Desktop</span></div></div>
+    <nav class="navigation" role="tablist" aria-label="设置分类" aria-orientation="vertical">
+      <button id="tab-harness" class="nav-item" role="tab" aria-controls="panel-harness" aria-selected="true" data-section="harness"><span class="nav-symbol" aria-hidden="true">H</span>Harness</button>
+      <button id="tab-plugins" class="nav-item" role="tab" aria-controls="panel-plugins" aria-selected="false" tabindex="-1" data-section="plugins"><span class="nav-symbol" aria-hidden="true">＋</span>插件</button>
+      <button id="tab-network" class="nav-item" role="tab" aria-controls="panel-network" aria-selected="false" tabindex="-1" data-section="network"><span class="nav-symbol" aria-hidden="true">↓</span>下载与网络</button>
+      <button id="tab-client" class="nav-item" role="tab" aria-controls="panel-client" aria-selected="false" tabindex="-1" data-section="client"><span class="nav-symbol" aria-hidden="true">↻</span>客户端更新</button>
+      <button id="tab-about" class="nav-item" role="tab" aria-controls="panel-about" aria-selected="false" tabindex="-1" data-section="about"><span class="nav-symbol" aria-hidden="true">i</span>关于与日志</button>
+    </nav>
+    <div class="sidebar-footer"><span class="status-dot" aria-hidden="true"></span>仅管理桌面客户端<span id="sidebar-version"></span></div>
+  </aside>
+  <main id="settings-content">
+    <section id="panel-harness" role="tabpanel" aria-labelledby="tab-harness" tabindex="0">
+      <header><p class="eyebrow">运行环境</p><h1>Harness</h1><p class="subtitle">管理官方运行环境，保留原生界面与功能。</p></header>
+      <div class="card version-card"><div class="card-heading"><div><span class="overline">当前版本</span><h2 id="harness-version">正在读取…</h2></div><span id="harness-badge" class="badge">准备中</span></div><p id="harness-status" class="detail" role="status">正在读取 Harness 状态。</p><div class="actions"><button class="primary" id="harness-primary" data-action="harness-check">检查更新</button><button id="harness-progress" data-action="harness-progress" hidden>查看进度</button><button id="terminal" data-action="terminal">打开终端</button></div></div>
+      <div class="card preferences"><div class="setting-row"><div><label for="harness-auto">自动检查更新</label><p>后台下载并校验新版本，由你确认重启切换。</p></div><label class="switch"><input id="harness-auto" type="checkbox" aria-label="自动检查 Harness 更新"><span aria-hidden="true"></span></label></div><div class="setting-row"><div><label for="harness-interval">检查频率</label><p>客户端运行期间生效。</p></div><select id="harness-interval"><option value="6h">每 6 小时</option><option value="24h">每天</option><option value="7d">每周</option></select></div><div class="setting-row"><div><label for="harness-channel">更新通道</label><p>自动跟随当前版本的发布通道。</p></div><select id="harness-channel"><option value="auto">自动跟随</option><option value="latest">稳定版</option><option value="next">预览版</option></select></div></div>
+      <p class="section-note">Harness 与客户端独立更新。切换设置不会移除已有插件或聊天数据。</p>
+    </section>
+    <section id="panel-plugins" role="tabpanel" aria-labelledby="tab-plugins" tabindex="0" hidden>
+      <header><p class="eyebrow">扩展与个性化</p><h1>插件</h1><p class="subtitle">发现社区扩展，在当前 Harness 中安装和管理。</p></header>
+      <div class="plugin-tabs" role="tablist" aria-label="插件分类">
+        <button id="plugin-tab-store" role="tab" aria-controls="plugin-panel-store" aria-selected="true" data-plugin-tab="store">商店</button>
+        <button id="plugin-tab-installed" role="tab" aria-controls="plugin-panel-installed" aria-selected="false" tabindex="-1" data-plugin-tab="installed">已安装 <span id="plugin-installed-count">0</span></button>
+      </div>
+      <div id="plugins-runtime-notice" class="notice" hidden>请先安装并启动 Harness，再安装或管理插件。</div>
+      <div id="plugins-operation" class="card plugin-operation" role="status" hidden><div class="card-heading"><h2 id="plugins-progress-label">正在处理插件…</h2><span id="plugins-progress-percent" class="badge" hidden></span></div><progress id="plugins-progress-meter" max="100" aria-label="插件操作进度"></progress><p id="plugins-progress-detail" class="detail"></p></div>
+      <p id="plugins-error" class="notice plugin-error" role="alert" hidden>操作未完成，请重试或查看日志。</p>
+      <p id="plugins-notice" class="notice" hidden></p>
+      <div id="plugin-panel-store" role="tabpanel" aria-labelledby="plugin-tab-store">
+        <div class="plugin-toolbar"><label class="plugin-search"><span class="sr-only">远程搜索插件名称、简介或 README</span><input id="plugin-search" type="search" maxlength="100" placeholder="远程搜索名称、简介或 README" aria-describedby="plugins-search-hint" autocomplete="off" spellcheck="false"></label><button id="plugins-refresh" data-action="plugins-refresh">刷新目录</button></div>
+        <p id="plugins-search-hint" class="section-note plugin-search-hint">支持中文、字母、数字和 . _ / -，不支持高级查询语法。输入后自动搜索，按 Enter 可立即搜索。</p>
+        <p class="section-note plugin-safety">社区目录收录不代表安全或兼容认证。插件可执行代码，请先查看作者和源码，安装前还需确认。</p>
+        <p id="plugins-catalog-status" class="detail plugin-list-status" role="status">进入插件页面后加载社区目录。</p>
+        <p id="plugins-catalog-error" class="notice plugin-error" role="alert" hidden></p>
+        <div id="plugins-catalog" class="plugin-list" aria-label="可安装插件"></div>
+        <div class="plugin-pagination"><button id="plugins-more" data-action="plugins-more" hidden>加载更多</button><p id="plugins-catalog-limit" class="section-note" hidden></p></div>
+      </div>
+      <div id="plugin-panel-installed" role="tabpanel" aria-labelledby="plugin-tab-installed" hidden>
+        <div class="plugin-toolbar"><div><h2>当前 web 配置的插件</h2><p id="plugins-checked-at" class="detail">只检查更新，不会自动安装。</p></div><button id="plugins-check" data-action="plugins-check">检查更新</button></div>
+        <p class="section-note plugin-safety">更新和卸载由你确认；官方自带组件不会被移除。操作完成后按提示重启 Harness 生效。</p>
+        <p id="plugins-installed-status" class="detail plugin-list-status" role="status">尚未读取已安装插件。</p>
+        <div id="plugins-installed" class="plugin-list" aria-label="已安装插件"></div>
+      </div>
+    </section>
+    <section id="panel-network" role="tabpanel" aria-labelledby="tab-network" tabindex="0" hidden>
+      <header><p class="eyebrow">连接偏好</p><h1>下载与网络</h1><p class="subtitle">选择适合当前网络的 npm 下载源。</p></header>
+      <div class="card"><div class="setting-row source-row"><div><label for="download-source">Harness 下载源</label><p id="source-description">官方 npm 软件包仓库。</p></div><select id="download-source"><option value="official">官方 npm</option><option value="npmmirror">国内镜像 · npmmirror</option></select></div><div id="mirror-notice" class="notice" hidden>npmmirror 是第三方镜像，可能存在同步延迟。版本信息与完整性校验仍以官方数据为准。</div><p class="detail source-scope">只影响后续 Harness 安装与更新中的 npm 下载，不修改系统全局 npm 配置。不会加速 GitHub 客户端更新、Git 插件、文件校验或启动测试。</p><p id="network-activity" class="notice" hidden></p></div>
+      <div class="card"><div class="card-heading"><h2>连接检测</h2><button id="test-connection" data-action="test-connection">检测当前下载源</button></div><p id="probe-detail" class="detail" role="status">检测连通性及响应时间，不下载完整运行环境。</p><div class="divider"></div><div class="setting-row"><div><span class="row-label">系统代理</span><p>使用系统代理设置，不修改代理配置。</p></div><span id="proxy-status" class="value">正在读取…</span></div></div>
+      <p class="section-note">镜像连接失败或缺少文件时，会尝试从官方源下载同一版本和依赖；校验失败不会被绕过，也不会自动安装旧版本。</p>
+    </section>
+    <section id="panel-client" role="tabpanel" aria-labelledby="tab-client" tabindex="0" hidden>
+      <header><p class="eyebrow">桌面客户端</p><h1>客户端更新</h1><p class="subtitle">更新窗口、托盘和桌面功能，不替换 Harness。</p></header>
+      <div class="card version-card"><div class="card-heading"><div><span class="overline">当前版本</span><h2 id="client-version">正在读取…</h2></div><span id="client-badge" class="badge">准备中</span></div><p id="client-status" class="detail" role="status">正在读取客户端状态。</p><div id="client-download-progress" class="download-progress" hidden><progress id="client-progress-meter" max="100" aria-label="客户端下载进度"></progress><p id="client-download-detail" class="detail"></p></div><div class="actions"><button class="primary" id="client-primary" data-action="client-check">检查更新</button><button id="client-progress" data-action="client-progress" hidden>查看进度</button><button data-action="open-client-releases">发布页</button></div></div>
+      <div class="card preferences"><div class="setting-row"><div><label for="client-auto">每天自动检查</label><p>只提醒更新，不自动重启或安装。</p></div><label class="switch"><input id="client-auto" type="checkbox" aria-label="每天自动检查客户端更新"><span aria-hidden="true"></span></label></div></div>
+      <p id="client-support" class="notice" hidden>开发版和便携版不支持自动替换。请在发布页下载安装版，以后即可使用自更新。</p><p class="section-note">安装版优先差分下载；无法差分时会下载完整安装包。重启安装前请保存当前工作。</p>
+    </section>
+    <section id="panel-about" role="tabpanel" aria-labelledby="tab-about" tabindex="0" hidden>
+      <header><p class="eyebrow">项目与支持</p><h1>关于与日志</h1><p class="subtitle">一个独立、轻量的 DeepSeek Harness 桌面入口。</p></header>
+      <div class="card about-card"><img src="./icon.png" width="72" height="72" alt="应用图标"><h2 id="about-product">MengLuo DSH Desktop</h2><p>DeepSeek Harness 非官方桌面客户端</p><dl class="version-list"><div><dt>客户端</dt><dd id="about-client-version">—</dd></div><div><dt>Harness</dt><dd id="about-harness-version">—</dd></div><div><dt>源码许可证</dt><dd>MIT</dd></div></dl></div>
+      <div class="card"><h2>支持与资源</h2><div class="actions"><button data-action="open-repository">项目仓库</button><button data-action="open-official">Harness 官网</button><button id="open-log" data-action="open-log">打开日志</button></div><p class="detail">反馈问题时可参考日志。公开分享前，请移除令牌、密钥和个人路径等敏感信息。</p></div><p class="section-note">本客户端不隶属于 DeepSeek，也未经其官方背书。第三方组件和图标遵循各自许可。</p>
+    </section>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

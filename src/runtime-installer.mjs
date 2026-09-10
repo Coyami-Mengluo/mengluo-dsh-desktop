@@ -13,6 +13,7 @@ import {
 } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from 'node:path'
 import { DSH_PACKAGE_NAME, NPM_REGISTRY_ORIGIN, parseSemver } from './update-policy.mjs'
+import { resolveDownloadSource } from './download-source.mjs'
 import {
   inspectNodeVersion,
   managedRuntimeDirectory,
@@ -47,9 +48,127 @@ export function npmInstallArguments({ npmCliPath, staging, cache, userConfig, ve
     '--loglevel=silly',
     `--registry=${NPM_REGISTRY_ORIGIN}/`,
     `--userconfig=${userConfig}`,
+    `--globalconfig=${userConfig}.global`,
     `--cache=${cache}`,
     `${DSH_PACKAGE_NAME}@${version}`,
   ]
+}
+
+/** Reify an already verified official lock; npm substitutes only npmjs tarball hosts. */
+export function npmCiArguments({ npmCliPath, staging, cache, userConfig, downloadSource }) {
+  const source = resolveDownloadSource(downloadSource)
+  return [
+    npmCliPath, 'ci', '--prefix', staging, '--omit=dev', '--ignore-scripts',
+    '--package-lock=true', '--engine-strict=true', '--audit=false', '--fund=false',
+    '--loglevel=silly', '--replace-registry-host=npmjs',
+    `--registry=${source.registry}`, `--userconfig=${userConfig}`,
+    `--globalconfig=${userConfig}.global`, `--cache=${cache}`,
+    ...(source.id === 'npmmirror' ? ['--fetch-timeout=45000', '--fetch-retries=1'] : []),
+  ]
+}
+
+/** Install bytes with one shared timeout budget; mirrors never choose the dependency graph. */
+export async function installNpmRuntimeClosure(options) {
+  const source = resolveDownloadSource(options.downloadSource)
+  const { npm, staging, cache, userConfig, release, signal, log = () => {} } = options
+  parseSemver(release.version)
+  signal?.throwIfAborted()
+  const run = options.runProcess ?? runProcess
+  const now = options.now ?? (() => performance.now())
+  const deadline = now() + UPDATE_INSTALL_TIMEOUT_MS
+  const notify = (selected, fallback, detail) => {
+    const status = Object.freeze({ source: selected, fallback, detail })
+    log(`[download source] ${detail}\n`)
+    try { options.onDownloadStatus?.(status) } catch (error) { log(`download source callback failed: ${String(error)}\n`) }
+  }
+  const invoke = async (args, proxy) => {
+    signal?.throwIfAborted()
+    const timeoutMs = Math.floor(deadline - now())
+    if (timeoutMs <= 0) throw new Error('npm installation exceeded its shared 30-minute timeout budget')
+    await run(npm.nodePath, args, {
+      cwd: staging, environment: createNpmInstallEnvironment(proxy), timeoutMs, signal, log,
+      activityRoot: staging, onActivity: options.onActivity,
+    })
+    signal?.throwIfAborted()
+  }
+  const argumentsOptions = { npmCliPath: npm.npmCliPath, staging, cache, userConfig, version: release.version }
+  if (source.id === 'official') {
+    notify('official', false, '通过官方 npm 下载并安装')
+    await invoke(npmInstallArguments(argumentsOptions), options.proxy)
+    return
+  }
+
+  notify('official', false, '从官方 npm 确定版本、依赖和完整性校验值')
+  const lockArguments = npmInstallArguments(argumentsOptions)
+  lockArguments.splice(-1, 0, '--package-lock-only')
+  await invoke(lockArguments, options.officialProxy)
+  validateOfficialRuntimeLock(staging, release)
+  const lockPath = join(staging, 'package-lock.json')
+  const manifestPath = join(staging, 'package.json')
+  const trustedLock = readFileSync(lockPath)
+  const trustedManifest = readFileSync(manifestPath)
+  const verifyUnchanged = () => {
+    if (!readFileSync(lockPath).equals(trustedLock) || !readFileSync(manifestPath).equals(trustedManifest)) {
+      throw new Error('npm ci changed the trusted official dependency graph; refusing this runtime')
+    }
+  }
+  notify('npmmirror', false, '通过 npmmirror 下载官方锁定的安装文件')
+  try {
+    await invoke(npmCiArguments({ ...argumentsOptions, downloadSource: 'npmmirror' }), options.proxy)
+    verifyUnchanged()
+  } catch (error) {
+    signal?.throwIfAborted()
+    verifyUnchanged()
+    if (!isMirrorTransportFailure(error)) throw error
+    notify('official', true, '镜像连接失败或缺少文件，改用官方 npm 下载同一版本和依赖')
+    await invoke(npmCiArguments({ ...argumentsOptions, downloadSource: 'official' }), options.officialProxy)
+    verifyUnchanged()
+  }
+}
+
+/** A mirror may only transport integrity-pinned HTTPS npm artifacts from this official graph. */
+export function validateOfficialRuntimeLock(root, release) {
+  parseSemver(release.version)
+  const manifest = readJson(join(root, 'package.json'), 'official runtime manifest')
+  const lock = readJson(join(root, 'package-lock.json'), 'official runtime lock')
+  if (manifest.dependencies?.[DSH_PACKAGE_NAME] !== release.version
+    || lock.lockfileVersion !== 3 || lock.packages === null || typeof lock.packages !== 'object'
+    || Array.isArray(lock.packages)
+    || lock.packages['']?.dependencies?.[DSH_PACKAGE_NAME] !== release.version) {
+    throw new Error('official runtime lock must pin the exact Harness version in lockfile v3')
+  }
+  for (const name of [DSH_PACKAGE_NAME, '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-web-frontend']) {
+    const entry = lock.packages[`node_modules/${name}`]
+    if (entry?.version !== release.version || (name === DSH_PACKAGE_NAME && entry.integrity !== release.integrity)) {
+      throw new Error(`official runtime lock does not match the selected Harness release: ${name}`)
+    }
+  }
+  for (const [path, entry] of Object.entries(lock.packages)) {
+    if (path === '') continue
+    if (!path.startsWith('node_modules/') || path.split('/').some(part => part === '..' || part === '.')
+      || path.includes('\\') || entry === null || typeof entry !== 'object' || entry.link) {
+      throw new Error('official runtime lock contains an unsafe dependency path or link')
+    }
+    let url
+    try { url = new URL(entry.resolved) } catch { throw new Error('official runtime dependency has no verifiable npm artifact') }
+    if (url.origin !== NPM_REGISTRY_ORIGIN || url.username !== '' || url.password !== ''
+      || url.search !== '' || url.hash !== '' || !url.pathname.endsWith('.tgz')) {
+      throw new Error('official runtime dependency is not an official HTTPS npm artifact')
+    }
+    if (typeof entry.integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]{86}==$/u.test(entry.integrity)
+      || Buffer.from(entry.integrity.slice(7), 'base64').toString('base64') !== entry.integrity.slice(7)) {
+      throw new Error('official runtime dependency is missing canonical SHA-512 integrity')
+    }
+  }
+  return lock
+}
+
+function isMirrorTransportFailure(error) {
+  return new Set([
+    'E404', 'ETARGET', 'E408', 'E429', 'E500', 'E502', 'E503', 'E504',
+    'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'EPIPE',
+    'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET',
+  ]).has(error?.npmCode)
 }
 
 /** Install and verify one immutable official npm runtime slot. */
@@ -62,6 +181,7 @@ export async function installOfficialRuntime(options) {
     smoke,
     signal,
   } = options
+  resolveDownloadSource(options.downloadSource)
   const progress = (stage, files) => {
     if (!isUpdateProgressStage(stage)) throw new Error(`unsupported update progress stage: ${String(stage)}`)
     const normalizedFiles = normalizeUpdateFileProgress(files)
@@ -109,24 +229,19 @@ export async function installOfficialRuntime(options) {
     }, null, 2)}\n`)
     const userConfig = join(staging, 'empty.npmrc')
     writeFileSync(userConfig, '')
+    writeFileSync(`${userConfig}.global`, '')
     const cache = join(userData, 'npm-cache')
     mkdirSync(cache, { recursive: true })
-    const args = npmInstallArguments({
-      npmCliPath: npm.npmCliPath,
-      staging,
-      cache,
-      userConfig,
-      version: release.version,
-    })
     log(`installing official ${DSH_PACKAGE_NAME}@${release.version}\n`)
     progress('installing')
-    await runProcess(npm.nodePath, args, {
-      cwd: staging,
-      environment: createNpmInstallEnvironment(options.proxy),
-      timeoutMs: UPDATE_INSTALL_TIMEOUT_MS,
+    await installNpmRuntimeClosure({
+      npm, staging, cache, userConfig, release,
+      downloadSource: options.downloadSource,
+      proxy: options.proxy,
+      officialProxy: options.officialProxy,
+      onDownloadStatus: options.onDownloadStatus,
       signal,
       log,
-      activityRoot: staging,
       onActivity: activity => {
         progress('installing', activity)
       },
@@ -363,6 +478,7 @@ export function countMaterializedFiles(root) {
 
 /** Run a bounded child process while keeping only a diagnostic output tail. */
 export function runProcess(command, args, options) {
+  if (options.signal?.aborted) return Promise.reject(options.signal.reason ?? new Error('Harness update installation was cancelled'))
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -376,6 +492,7 @@ export function runProcess(command, args, options) {
     let lastActivityCount = -1
     let lastActivitySignature = ''
     let npmLineBuffer = ''
+    let npmCode
     const activity = {
       completedFiles: 0,
       registryRequests: 0,
@@ -389,6 +506,8 @@ export function runProcess(command, args, options) {
       options.onActivity(Object.freeze({ ...activity }))
     }
     const observeNpmLine = line => {
+      const code = /^(?:npm\s+)?error\s+code\s+([A-Z][A-Z0-9_]*)\s*$/u.exec(line.trim())
+      if (code !== null) npmCode = code[1]
       if (/\bhttp fetch\b.*\b(?:200|304)\b/iu.test(line)) activity.registryRequests += 1
       if (/\bsill(?:y)? placeDep\b/iu.test(line)) activity.resolvedDependencies += 1
       if (/^(?:npm\s+)?(?:warn|error)\b/iu.test(line)) options.log(`[npm] ${line}\n`)
@@ -442,6 +561,7 @@ export function runProcess(command, args, options) {
     activityTimer?.unref?.()
     reportActivity()
     options.signal?.addEventListener('abort', abort, { once: true })
+    if (options.signal?.aborted) abort()
     child.once('error', error => { finish(rejectPromise, error) })
     child.once('close', (code, signal) => {
       if (npmLineBuffer.length > 0) {
@@ -452,14 +572,14 @@ export function runProcess(command, args, options) {
       reportActivity()
       if (forcedError !== undefined) finish(rejectPromise, forcedError)
       else if (code === 0) finish(resolvePromise, undefined)
-      else finish(rejectPromise, new Error(`npm install failed (code=${String(code)}, signal=${String(signal)})\n${output}`))
+      else finish(rejectPromise, Object.assign(new Error(`npm install failed (code=${String(code)}, signal=${String(signal)})\n${output}`), { npmCode }))
     })
   })
 }
 
 /**
  * Isolate npm configuration while applying an optional validated system proxy.
- * @param {string | undefined} proxy proxy URL selected by Electron.
+ * @param {string | null | undefined} proxy URL selected by Electron; null explicitly means DIRECT.
  * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} [source] parent environment.
  * @returns {NodeJS.ProcessEnv} npm child environment.
  */
@@ -470,7 +590,7 @@ export function createNpmInstallEnvironment(proxy, source = process.env) {
   for (const key of Object.keys(environment)) {
     if (/^npm_config_/iu.test(key)) delete environment[key]
   }
-  if (proxy !== undefined) {
+  if (proxy !== undefined && proxy !== null) {
     const parsed = new URL(proxy)
     const authority = proxy.slice(proxy.indexOf('//') + 2)
     const portMatch = authority.match(/:(\d{1,5})$/u)
@@ -481,9 +601,13 @@ export function createNpmInstallEnvironment(proxy, source = process.env) {
       || parsed.search !== '' || parsed.hash !== '') {
       throw new Error('resolved npm proxy is invalid')
     }
+  }
+  if (proxy !== undefined) {
     for (const key of Object.keys(environment)) {
-      if (/^(?:HTTP|HTTPS|ALL)_PROXY$/iu.test(key)) delete environment[key]
+      if (/^(?:HTTP|HTTPS|ALL|NO)_PROXY$/iu.test(key)) delete environment[key]
     }
+  }
+  if (proxy !== undefined && proxy !== null) {
     environment.HTTP_PROXY = proxy
     environment.HTTPS_PROXY = proxy
   }

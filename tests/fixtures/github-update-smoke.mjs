@@ -98,13 +98,27 @@ async function waitFor(predicate, timeout = 30_000) {
 async function run() {
   await app.whenReady()
   await import(pathToFileURL(join(application, 'src', 'main.mjs')).href)
-  const check = await waitFor(() => findMenu('检查客户端更新…'))
+  const entry = await waitFor(() => findMenu('检查客户端更新…') ?? findMenu('客户端设置…'))
   assert.equal(app.getPath('userData'), expected.profile)
-  check.click()
-  const restart = await waitFor(() => findMenu(`重启并安装客户端 ${expected.to}…`), 6 * 60_000)
+  let settings
+  let restart
+  if (entry.label === '客户端设置…') {
+    entry.click()
+    settings = await waitFor(async () => {
+      const window = BrowserWindow.getAllWindows().find(item => item.webContents.getURL().endsWith('/settings.html'))
+      if (!window || window.webContents.isLoadingMainFrame()) return
+      return await window.webContents.executeJavaScript('Boolean(window.clientSettings)') ? window : undefined
+    })
+    await settings.webContents.executeJavaScript("document.getElementById('tab-client').click(); void window.clientSettings.action({ type: 'client-check' })")
+    await waitFor(() => settings.webContents.executeJavaScript("document.getElementById('client-primary').dataset.action === 'client-install'"), 6 * 60_000)
+  } else {
+    entry.click()
+    restart = await waitFor(() => findMenu(`重启并安装客户端 ${expected.to}…`), 6 * 60_000)
+  }
   const progress = BrowserWindow.getAllWindows().find(window => window.getTitle().includes('客户端更新'))
   assert.ok(progress)
   writeFileSync(join(temporary, 'update-downloaded.png'), (await progress.webContents.capturePage()).toPNG())
-  restart.click()
+  if (settings) await settings.webContents.executeJavaScript("void window.clientSettings.action({ type: 'client-install' })")
+  else restart.click()
 }
 void run().catch(fail)
