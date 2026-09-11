@@ -1,18 +1,18 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 
-// Exact fixture captures reviewed for visible content and PNG metadata.
+// Exact maintainer-supplied captures reviewed for visible content and PNG metadata.
 // These digests record that review; they are not signatures or a privacy scan.
 // Replacing a screenshot requires a new visual/metadata review and digest.
 export const DOCUMENTATION_ASSETS = Object.freeze({
+  'docs/screenshots/desktop.png': Object.freeze({
+    sha256: '71f179dd02a95e1119a5692b7f00241d934b5c1ad89492db3d2aa97f5765f22d', width: 1653, height: 1078,
+  }),
   'docs/screenshots/harness.png': Object.freeze({
-    sha256: 'ad7a3d569dbb5601bdd71ae5c93f50c84457f0ddfb5d26743ee2857b841ace05', width: 1334, height: 1030,
+    sha256: '1add2510ab7396f8bdd34fc7ed97eaa41fe3a897e5b0daae150ac4ba59653861', width: 1653, height: 1078,
   }),
   'docs/screenshots/plugins.png': Object.freeze({
-    sha256: '047ba315033dc5890e9a2258241e00d86ac8b6d883d1cf6becb2fcd5c4d7813a', width: 1334, height: 1030,
-  }),
-  'docs/screenshots/snapshots.png': Object.freeze({
-    sha256: '9c8a2bb97970a63ceef43b90f98c5901fcb9fb53510bb4bb31c949e3a0b3b0d0', width: 1334, height: 1030,
+    sha256: '6d66514850cadae1d4f811c258b80c936abf04919c84565807ecbd3a4e0928ba', width: 1653, height: 1078,
   }),
 })
 

@@ -18,19 +18,19 @@
 
 ## 界面预览
 
-以下截图来自 **0.5.6 开发版（未发布）**的客户端自有设置页，使用隔离的虚构演示数据，不含用户资料，也不是官方 Harness 聊天界面。详见[截图来源说明](docs/screenshots/README.md)。
+桌面客户端主界面、Harness 设置与社区插件商店。详见[截图来源说明](docs/screenshots/README.md)。
+
+桌面客户端主界面：
+
+![MengLuo DSH Desktop 窗口内的 Harness 起始界面](docs/screenshots/desktop.png)
 
 Harness 版本与更新设置：
 
-![0.5.6 开发版客户端设置：Harness，使用虚构演示数据](docs/screenshots/harness.png)
+![客户端设置中的 Harness 更新选项](docs/screenshots/harness.png)
 
-使用虚构条目的社区插件商店：
+社区插件商店：
 
-![0.5.6 开发版插件商店，列表为虚构演示数据](docs/screenshots/plugins.png)
-
-本地插件快照与手动回滚入口：
-
-![0.5.6 开发版已安装插件和快照入口，使用虚构演示数据](docs/screenshots/snapshots.png)
+![客户端中的社区插件搜索与安装入口](docs/screenshots/plugins.png)
 
 ## 客户端设置与下载源
 

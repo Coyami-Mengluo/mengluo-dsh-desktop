@@ -16,12 +16,15 @@ describe('reviewed documentation source', () => {
     for (const readme of ['README.md', 'README.zh.md']) {
       const markdown = readFileSync(resolve(root, readme), 'utf8')
       assert.ok(markdown.includes('(CHANGELOG.md)'))
+      const images = [...markdown.matchAll(/!\[[^\]]*\]\(([^)]+)\)/gu)].map(match => match[1])
+      assert.deepEqual(images, ['docs/screenshots/desktop.png', 'docs/screenshots/harness.png', 'docs/screenshots/plugins.png'])
       for (const file of Object.keys(DOCUMENTATION_ASSETS)) {
         assert.ok(files.includes(file))
         assert.ok(markdown.includes(`](${file})`), `${readme} must link the reviewed screenshot ${file}`)
       }
     }
     assert.ok(!files.some(file => /^(?:build|dist|node_modules)\//u.test(file)))
+    assert.ok(!files.includes('docs/screenshots/snapshots.png'))
   })
 
   it('accepts the exact reviewed images and rejects changed images or unreviewed paths', () => {

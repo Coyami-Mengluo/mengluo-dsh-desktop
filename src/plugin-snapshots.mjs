@@ -63,9 +63,44 @@ async function plainAncestors(filename, includeLeaf = true) {
     const stat = await maybeStat(current)
     if (!stat) continue
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw problem('SNAPSHOT_PATH')
-    // Detect Windows reparse aliases not reported as SymbolicLink by Node.
-    if (path.normalize(await fs.realpath(current)).toLowerCase() !== path.normalize(current).toLowerCase()) throw problem('SNAPSHOT_PATH')
+    const canonical = await fs.realpath(current)
+    if (path.relative(current, canonical) !== '') {
+      // Windows short names (for example RUNNER~1) name the same directory.
+      // Prove that identity instead of accepting any realpath redirection.
+      if (process.platform !== 'win32') throw problem('SNAPSHOT_PATH')
+      const [aliasStat, canonicalStat] = await Promise.all([
+        fs.lstat(current, { bigint: true }), fs.lstat(canonical, { bigint: true }),
+      ])
+      if (aliasStat.isSymbolicLink() || canonicalStat.isSymbolicLink() || !aliasStat.isDirectory() || !canonicalStat.isDirectory()
+        || aliasStat.ino === 0n || aliasStat.ino !== canonicalStat.ino || aliasStat.dev !== canonicalStat.dev) throw problem('SNAPSHOT_PATH')
+    }
+    current = canonical
   }
+  return current
+}
+
+async function internalDirectoryTarget(root, target, aliases) {
+  for (const alias of aliases) {
+    let relative
+    if (within(alias, target)) relative = path.relative(alias, target)
+    else if (process.platform === 'win32') {
+      const parsed = path.parse(target)
+      if (path.relative(parsed.root, path.parse(alias).root) !== '') continue
+      const components = target.slice(parsed.root.length).split(path.sep).filter(Boolean)
+      const depth = alias.slice(path.parse(alias).root.length).split(path.sep).filter(Boolean).length
+      if (components.length < depth) continue
+      const prefix = path.join(parsed.root, ...components.slice(0, depth))
+      // Only map the known root prefix. Relocated recovery links can still
+      // mention the old root, so inspect descendants in the retained copy.
+      if (path.relative(alias, await plainAncestors(prefix)) !== '') continue
+      relative = components.slice(depth).join(path.sep)
+    }
+    if (relative === undefined) continue
+    const local = await plainAncestors(path.join(root, relative))
+    if (!within(root, local)) throw problem('SNAPSHOT_PATH')
+    return local
+  }
+  throw problem('SNAPSHOT_PATH')
 }
 
 async function regularFile(filename, budget, onChunk) {
@@ -157,10 +192,7 @@ async function scanTree(root, budget, progress, { aliases = [root], missingLink 
       const stat = await fs.lstat(filename)
       if (stat.isSymbolicLink()) {
         const target = path.resolve(directory, await fs.readlink(filename))
-        const alias = aliases.find(candidate => within(candidate, target))
-        if (!alias) throw problem('SNAPSHOT_PATH')
-        const localTarget = path.join(root, path.relative(alias, target))
-        await plainAncestors(localTarget)
+        const localTarget = await internalDirectoryTarget(root, target, aliases)
         const targetStat = await fs.lstat(localTarget)
         if (!targetStat.isDirectory() || targetStat.isSymbolicLink()) throw problem('SNAPSHOT_PATH')
         entries.push({ path: name, type: 'link', target: path.relative(root, localTarget).split(path.sep).join('/') })
@@ -262,8 +294,18 @@ async function atomicJson(filename, data) {
 /** Private, bounded byte snapshots. Never invokes npm, a CLI, or the network. */
 export class PluginSnapshots {
   constructor({ userData, dshHome, now = Date.now, onProgress, fault } = {}) {
-    this.userData = absolute(userData)
-    this.dshHome = absolute(dshHome)
+    this.configuredUserData = absolute(userData)
+    this.configuredDshHome = absolute(dshHome)
+    this.bindPaths(this.configuredUserData, this.configuredDshHome)
+    this.now = now
+    this.onProgress = onProgress
+    this.fault = fault
+    this.busy = false
+  }
+
+  bindPaths(userData, dshHome) {
+    this.userData = userData
+    this.dshHome = dshHome
     this.profileParent = path.join(this.dshHome, 'profiles')
     this.profilePath = path.join(this.profileParent, 'web')
     this.recordPath = path.join(this.userData, 'plugin-sources.json')
@@ -271,15 +313,14 @@ export class PluginSnapshots {
     this.journalPath = path.join(this.storePath, 'restore-journal.json')
     this.linkJournalPath = path.join(this.storePath, 'restore-link-repair.json')
     if (within(this.profilePath, this.userData) || within(this.storePath, this.dshHome) || within(this.profilePath, this.storePath)) throw problem('SNAPSHOT_PATH')
-    this.now = now
-    this.onProgress = onProgress
-    this.fault = fault
-    this.busy = false
   }
 
   async roots(create = false) {
-    await plainAncestors(this.userData)
-    await plainAncestors(this.dshHome)
+    const userData = await plainAncestors(this.configuredUserData)
+    const dshHome = await plainAncestors(this.configuredDshHome)
+    if (this.pathsBound && (path.relative(userData, this.userData) !== '' || path.relative(dshHome, this.dshHome) !== '')) throw problem('SNAPSHOT_PATH')
+    this.bindPaths(userData, dshHome)
+    this.pathsBound = true
     await plainAncestors(this.profileParent)
     await plainAncestors(this.storePath)
     if (create) {
@@ -470,7 +511,7 @@ export class PluginSnapshots {
       if (!stat && journal.linkRepair?.kind === kind && journal.linkRepair.path === entry.path) continue
       if (!stat?.isSymbolicLink()) throw problem('SNAPSHOT_RECOVERY', true)
       const raw = path.resolve(path.dirname(filename), await fs.readlink(filename))
-      if (!aliases.some(alias => path.relative(path.join(alias, ...entry.target.split('/')), raw) === '')) throw problem('SNAPSHOT_RECOVERY', true)
+      if (path.relative(path.join(root, ...entry.target.split('/')), await internalDirectoryTarget(root, raw, aliases)) !== '') throw problem('SNAPSHOT_RECOVERY', true)
     }
     for (const entry of links) {
       const filename = path.join(root, ...entry.path.split('/'))

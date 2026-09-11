@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict'
 import * as fs from 'node:fs/promises'
 import path from 'node:path'
+import { execFile } from 'node:child_process'
 import { tmpdir } from 'node:os'
+import { promisify } from 'node:util'
 import { afterEach, describe, it } from 'node:test'
 import { PluginSnapshots } from '../src/plugin-snapshots.mjs'
 
 const roots = []
+const runFile = promisify(execFile)
 afterEach(async () => {
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true })
 })
@@ -44,7 +47,63 @@ async function postOperation(world) {
   await fs.writeFile(world.record, '{"example":{"fixture":2}}')
 }
 
+async function shortDirectoryPath(directory) {
+  // Child-only environment variable; neither the real profile nor global
+  // TEMP/TMP is changed. COM reports the actual filesystem-provided 8.3 name.
+  const { stdout } = await runFile('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+    '$ErrorActionPreference = "Stop"; $fso = New-Object -ComObject Scripting.FileSystemObject; $fso.GetFolder($env:PLUGIN_SNAPSHOT_FIXTURE_DIR).ShortPath'],
+  { env: { ...process.env, PLUGIN_SNAPSHOT_FIXTURE_DIR: directory }, windowsHide: true, timeout: 10_000, maxBuffer: 4096 })
+  return stdout.trim()
+}
+
 describe('offline plugin snapshots use temp fixtures only', () => {
+  it('accepts real Windows 8.3 root aliases and restores source bytes and internal PNPM junctions', async t => {
+    if (process.platform !== 'win32') return t.skip('Windows 8.3 directory aliases')
+    const world = await fixture()
+    await world.put('node_modules/.pnpm/dependency-long-name/node_modules/dependency/index.js', 'dependency fixture')
+    const dependency = path.join(world.profile, 'node_modules/.pnpm/dependency-long-name/node_modules/dependency')
+    const [shortUserData, shortDshHome, shortDependency] = await Promise.all([
+      shortDirectoryPath(world.userData), shortDirectoryPath(world.dshHome), shortDirectoryPath(dependency),
+    ])
+    const userData = await fs.realpath(world.userData), dshHome = await fs.realpath(world.dshHome)
+    if (path.relative(shortUserData, userData) === '' || path.relative(shortDshHome, dshHome) === '') return t.skip('8.3 name creation is disabled on the fixture volume')
+    assert.equal((await fs.lstat(shortUserData)).isSymbolicLink(), false)
+    assert.equal((await fs.lstat(shortDshHome)).isSymbolicLink(), false)
+    const link = path.join(world.profile, 'node_modules/dependency')
+    await fs.symlink(shortDependency, link, 'junction')
+    for (const options of [
+      { userData: shortUserData, dshHome: shortDshHome }, { userData, dshHome: shortDshHome },
+      { userData: shortUserData, dshHome }, { userData, dshHome },
+    ]) {
+      const snapshots = new PluginSnapshots(options)
+      const snapshot = await snapshots.create({ runtimeVersion: '1.0.0', action: 'update', pluginName: 'example' })
+      await postOperation(world)
+      await snapshots.markAfter(snapshot.id, { status: 'success' })
+      assert.equal((await snapshots.inspect(snapshot.id)).canRestore, true)
+      await snapshots.restore(snapshot.id)
+      assert.equal(await fs.readFile(world.record, 'utf8'), '{ "example": { "fixture": 1 } }\n')
+      assert.equal(await fs.readFile(path.join(link, 'index.js'), 'utf8'), 'dependency fixture')
+      assert.equal(path.relative(snapshots.recordPath, await fs.realpath(world.record)), '')
+      assert.equal((await snapshots.getRecoveryState()).recoveryRequired, false)
+    }
+  })
+
+  it('rejects real junction ancestors and overlapping roots reached through Windows short aliases', async t => {
+    if (process.platform !== 'win32') return t.skip('Windows 8.3 ancestor checks')
+    const world = await fixture()
+    const shortRoot = await shortDirectoryPath(world.root)
+    if (path.relative(shortRoot, await fs.realpath(world.root)) === '') return t.skip('8.3 name creation is disabled on the fixture volume')
+    const junction = path.join(shortRoot, 'linked-parent')
+    await fs.symlink(await fs.realpath(world.userData), junction, 'junction')
+    const unsafe = new PluginSnapshots({ userData: path.join(junction, 'nested'), dshHome: world.dshHome })
+    await assert.rejects(unsafe.create({ runtimeVersion: '1.0.0', action: 'update', pluginName: 'example' }), { code: 'SNAPSHOT_PATH' })
+    const nested = path.join(world.profile, 'nested-shell')
+    await fs.mkdir(nested)
+    const overlapping = new PluginSnapshots({ userData: await shortDirectoryPath(nested), dshHome: await fs.realpath(world.dshHome) })
+    await assert.rejects(overlapping.create({ runtimeVersion: '1.0.0', action: 'update', pluginName: 'example' }), { code: 'SNAPSHOT_PATH' })
+    assert.equal(await fs.readFile(world.record, 'utf8'), '{ "example": { "fixture": 1 } }\n')
+  })
+
   it('preserves complete packages/config and exact source-record bytes, then restores without any install tool', async () => {
     const updates = []
     const world = await fixture({ onProgress: item => updates.push(item) })

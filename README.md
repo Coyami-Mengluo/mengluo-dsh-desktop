@@ -18,19 +18,19 @@ The transparent application icon is AI-generated artwork supplied by the maintai
 
 ## Screenshots
 
-These screenshots show the client's own settings page in **0.5.6 development (unreleased)** with isolated, fictional demonstration data. They do not show a user's profile or the official Harness conversation UI. See [screenshot provenance](docs/screenshots/README.md).
+The desktop client, Harness settings, and community plugin store. See [screenshot provenance](docs/screenshots/README.md).
+
+Harness in the desktop window:
+
+![MengLuo DSH Desktop displaying the Harness start screen](docs/screenshots/desktop.png)
 
 Harness version and update settings:
 
-![Development 0.5.6 client settings: Harness, using demonstration data](docs/screenshots/harness.png)
+![Harness settings and update preferences](docs/screenshots/harness.png)
 
-Community plugin store with fictional listings:
+Community plugin store:
 
-![Development 0.5.6 plugin store with fictional plugin listings](docs/screenshots/plugins.png)
-
-Local plugin snapshots and manual rollback controls:
-
-![Development 0.5.6 installed plugins and snapshot controls, using demonstration data](docs/screenshots/snapshots.png)
+![Community plugin search and installation controls](docs/screenshots/plugins.png)
 
 ## Client settings and download sources
 
