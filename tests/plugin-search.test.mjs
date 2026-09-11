@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { PluginManager } from '../src/plugin-manager.mjs'
+import { PluginCatalog } from '../src/plugin-catalog.mjs'
 
 const worlds = []
 afterEach(() => { for (const world of worlds.splice(0)) { world.manager.dispose(); rmSync(world.root, { recursive: true, force: true }) } })
@@ -116,11 +117,14 @@ describe('remote plugin search coordination', () => {
     assert.deepEqual(calls.at(-1), { query: 'skin', page: 1, refresh: true })
     assert.equal(world.manager.getState().catalog.length, 1)
     world.catalog.list = async () => { throw new Error('offline') }
+    world.now += 30_000
     assert.equal((await world.manager.handleAction({ type: 'plugins-refresh' })).ok, false)
     assert.equal(world.manager.getState().catalog[0].name, 'item-1')
     assert.ok(world.manager.getState().catalogError)
     assert.equal((await world.manager.handleAction({ type: 'plugins-search', query: 'new' })).ok, false)
-    assert.equal(world.manager.getState().catalog.length, 0, 'New query failures cannot show old entries as new matches')
+    assert.equal(world.manager.getState().catalog.length, 1, 'New query failures retain the explicitly labelled previous results')
+    assert.equal(world.manager.getState().catalogQuery, 'skin')
+    assert.equal(world.manager.getState().hasMore, false, 'A failed new query cannot append pages to a previous result set')
     assert.equal(world.manager.getState().query, 'new')
   })
 
@@ -215,15 +219,126 @@ describe('remote plugin search coordination', () => {
     assert.equal(world.manager.isBusy(), true)
     assert.equal((await world.manager.handleAction({ type: 'plugin-install', id: entry('default').id })).ok, false)
   })
+
+  it('enforces the manual refresh cooldown in the main process before inventory or network work', async () => {
+    const world = fixture()
+    const pending = Promise.withResolvers()
+    world.catalog.list = options => { world.requests.push(options); return pending.promise }
+    const first = world.manager.handleAction({ type: 'plugins-refresh' })
+    const until = world.manager.getState().rateLimits.refreshUntil
+    assert.equal(until, world.now + 30_000)
+    for (let i = 0; i < 15; i += 1) {
+      const result = await world.manager.handleAction({ type: 'plugins-refresh' })
+      assert.equal(result.rateLimited, true)
+      assert.equal(result.retryAt, until)
+    }
+    assert.equal(world.requests.length, 1)
+    assert.equal(world.reads, 1)
+    pending.resolve(pageResult('', 1, [entry('kept')]))
+    assert.equal((await first).ok, true)
+    world.now += 30_000
+    assert.equal(world.manager.getState().rateLimits.refreshUntil, 0)
+    assert.equal((await world.manager.handleAction({ type: 'plugins-refresh' })).ok, true)
+    assert.equal(world.requests.length, 2)
+  })
+
+  it('exposes backend cooldown, preserves labelled old results and performs no queued automatic retry', async () => {
+    const world = fixture()
+    await world.manager.handleAction({ type: 'plugins-search', query: 'old' })
+    let calls = 0
+    const until = world.now + 60_000
+    world.catalog.getRateLimitState = () => ({ searchUntil: until > world.now ? until : 0, metadataUntil: 0,
+      searchReason: '搜索请求暂时冷却中。', metadataReason: '' })
+    world.catalog.list = async () => {
+      calls += 1
+      throw Object.assign(new Error('private diagnostic'), { code: 'PLUGIN_RATE_LIMIT', retryAt: until })
+    }
+    const result = await world.manager.handleAction({ type: 'plugins-search', query: 'new' })
+    assert.equal(result.rateLimited, true)
+    const state = world.manager.getState()
+    assert.equal(state.rateLimits.searchUntil, until)
+    assert.equal(state.catalogQuery, 'old')
+    assert.equal(state.query, 'new')
+    assert.equal(state.catalog[0].name, 'default')
+    assert.equal(state.catalogLoading, false)
+    assert.doesNotMatch(JSON.stringify({ result, state }), /private diagnostic/u)
+    assert.equal((await world.manager.handleAction({ type: 'plugins-more', query: 'new' })).ok, false)
+    assert.equal((await world.manager.handleAction({ type: 'plugins-refresh' })).rateLimited, true)
+    assert.equal(calls, 1)
+    world.now = until
+    await Promise.resolve()
+    assert.equal(world.manager.getState().rateLimits.searchUntil, 0)
+    assert.equal(calls, 1, 'Expiry only enables a future explicit retry')
+  })
+
+  it('does not pre-block ordinary cached searches when the backend reports a cooldown', async () => {
+    const world = fixture()
+    world.catalog.getRateLimitState = () => ({ searchUntil: world.now + 60_000, metadataUntil: 0 })
+    world.catalog.list = async ({ query, page, refresh }) => {
+      assert.equal(refresh, false)
+      return pageResult(query, page, [entry('cached')])
+    }
+    assert.equal((await world.manager.handleAction({ type: 'plugins-search', query: 'cached' })).ok, true)
+    assert.equal(world.manager.getState().catalogQuery, 'cached')
+    assert.equal(world.manager.getState().catalog[0].name, 'cached')
+  })
+
+  it('shares the real dispatch budget across search, next-page and forced refresh while cached results stay usable', async () => {
+    const world = fixture()
+    let dispatched = 0
+    world.manager.catalog = new PluginCatalog({ now: () => world.now, fetch: async () => {
+      dispatched += 1
+      return Response.json({ total_count: 200, items: [{ full_name: 'example/theme', default_branch: 'main',
+        owner: { login: 'example' }, topics: ['dsh-plugin'], description: 'Fixture only' }] })
+    } })
+    const search = query => world.manager.handleAction({ type: 'plugins-search', query })
+    assert.equal((await search('first')).ok, true)
+    assert.equal((await search('too-soon')).rateLimited, true)
+    assert.equal(dispatched, 1)
+    assert.equal((await search('first')).ok, true, 'Known query is served even within the 1-second gap')
+    world.now += 1000
+    assert.equal((await world.manager.handleAction({ type: 'plugins-more', query: 'first' })).ok, true)
+    world.now += 1000
+    assert.equal((await world.manager.handleAction({ type: 'plugins-refresh' })).ok, true)
+    assert.equal(dispatched, 3)
+    for (let n = 4; n <= 8; n += 1) {
+      world.now += 1000
+      assert.equal((await search(`word-${n}`)).ok, true)
+    }
+    world.now += 1000
+    assert.equal((await search('ninth')).rateLimited, true)
+    assert.equal(dispatched, 8)
+    assert.equal(world.manager.getState().catalogQuery, 'word-8')
+    assert.equal((await search('word-7')).ok, true)
+    assert.equal(dispatched, 8)
+    assert.equal(world.manager.getState().catalogQuery, 'word-7')
+    world.now = 1_060_000
+    assert.equal((await search('ninth')).ok, true)
+    assert.equal(dispatched, 9)
+  })
+
+  it('a superseded rate-limit error cannot replace a newer successful snapshot', async () => {
+    const world = fixture()
+    const stale = Promise.withResolvers()
+    world.catalog.list = ({ query, page }) => query === 'old' ? stale.promise : Promise.resolve(pageResult(query, page, [entry(query)]))
+    const first = world.manager.handleAction({ type: 'plugins-search', query: 'old' })
+    assert.equal((await world.manager.handleAction({ type: 'plugins-search', query: 'new' })).ok, true)
+    stale.reject(Object.assign(new Error('limited'), { code: 'PLUGIN_RATE_LIMIT', retryAt: world.now + 60_000 }))
+    assert.equal((await first).ok, true)
+    assert.equal(world.manager.getState().catalogQuery, 'new')
+    assert.equal(world.manager.getState().catalogError, '')
+    assert.equal(world.manager.getState().catalogLoading, false)
+  })
 })
 
 function fixture() {
-  const world = { root: mkdtempSync(join(tmpdir(), 'mengluo-plugin-search-')), requests: [], reads: 0, mutations: 0, changes: 0 }
+  const world = { root: mkdtempSync(join(tmpdir(), 'mengluo-plugin-search-')), requests: [], reads: 0, mutations: 0, changes: 0, now: 1_000_000 }
   world.catalog = {
     list: async options => { world.requests.push(options); return pageResult(options.query, options.page, [entry('default')], 200) },
     checkUpdate: async () => { throw new Error('Unexpected installed-update query') }, dispose: () => {},
   }
   world.manager = new PluginManager({
+    now: () => world.now,
     userData: world.root, catalog: world.catalog, getRuntime: () => ({ version: 'fixture' }), isBlocked: () => false,
     readInstalled: () => { world.reads += 1; return { plugins: [] } },
     runOperation: () => { world.mutations += 1; throw new Error('Unexpected mutation') },

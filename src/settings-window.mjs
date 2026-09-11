@@ -48,6 +48,16 @@ export function validateSettingsAction(request) {
 }
 
 const failure = () => ({ ok: false, message: '操作未完成，请重试或查看日志。' })
+const pluginRequestActions = new Set(['plugins-search', 'plugins-more', 'plugins-refresh', 'plugins-check', 'plugin-install', 'plugin-update'])
+const safeDeadline = value => Number.isSafeInteger(value) && value > 0 && value <= 8.64e15 ? value : 0
+const cooldownFailure = (request, result) => pluginRequestActions.has(request.type)
+  && (result?.rateLimited === true || result?.code === 'PLUGIN_RATE_LIMIT') && safeDeadline(result.retryAt)
+  ? { ok: false, rateLimited: true, retryAt: result.retryAt, message: '插件请求冷却中，请等待倒计时结束后重试。' } : undefined
+const safeCatalogMessages = new Set([
+  '搜索请求已暂停，已有结果已保留。请等待倒计时结束后重试。',
+  '下一页暂时无法获取，已有结果已保留。请稍后点击“加载更多”重试，或检查系统代理。',
+  '搜索暂时未完成，已有结果已保留。请检查系统代理或稍后重试，不能据此判断没有匹配插件。',
+])
 
 /** Own a reusable, isolated local settings window. Closing it never quits Harness. */
 export function createSettingsWindow(options) {
@@ -68,7 +78,14 @@ export function createSettingsWindow(options) {
       for (const key of ['harness', 'client', 'plugins']) {
         if (state[key]) state[key] = { ...state[key], error: state[key].error ? '操作未完成，请查看日志。' : undefined }
       }
-      if (state.plugins) state.plugins.catalogError = state.plugins.catalogError ? '目录搜索未完成，请检查系统代理或稍后重试；GitHub 可能暂时限流。' : undefined
+      if (state.plugins) {
+        state.plugins.catalogError = safeCatalogMessages.has(state.plugins.catalogError) ? state.plugins.catalogError
+          : state.plugins.catalogError ? '目录搜索未完成，请检查系统代理或稍后重试。已有结果不会被清除。' : undefined
+        if (state.plugins.rateLimits) state.plugins.rateLimits = {
+          ...Object.fromEntries(['searchUntil', 'metadataUntil', 'refreshUntil', 'checkUntil']
+            .map(key => [key, safeDeadline(state.plugins.rateLimits[key])])),
+        }
+      }
       window.webContents.send(SETTINGS_IPC.state, {
         ...state, theme: options.nativeTheme.shouldUseDarkColors ? 'dark' : 'light', section, sectionRevision,
       })
@@ -80,8 +97,10 @@ export function createSettingsWindow(options) {
     const request = { ...args[0], ...(args[0].patch ? { patch: { ...args[0].patch } } : {}) }
     try {
       const result = await options.onAction(request)
-      return result === false || result?.ok === false ? failure() : { ok: true }
-    } catch {
+      return result === false || result?.ok === false ? cooldownFailure(request, result) ?? failure() : { ok: true }
+    } catch (error) {
+      const cooldown = cooldownFailure(request, error)
+      if (cooldown) return cooldown
       options.log?.('client settings action failed; see operation log for details\n')
       return failure()
     }

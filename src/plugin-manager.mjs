@@ -8,11 +8,13 @@ const SOURCE_NOTICE = '社区插件未经本客户端安全审核，兼容性需
 const ID = /^[A-Za-z0-9@/_.:-]{1,240}$/u
 const SHA = /^[a-f0-9]{40}$/u
 const REPO = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/u
+const MANUAL_REFRESH_COOLDOWN_MS = 30_000
 
 /** Main-process coordinator. Only IDs from a freshly read inventory/catalog cross IPC. */
 export class PluginManager {
   constructor(options) {
     this.options = options
+    this.now = options.now ?? Date.now
     this.catalog = options.catalog
     this.readInstalled = options.readInstalled ?? readInstalledPlugins
     this.runOperation = options.runOperation ?? runPluginOperation
@@ -20,6 +22,9 @@ export class PluginManager {
     this.records = this.readRecords()
     this.catalogItems = []
     this.query = ''
+    this.catalogQuery = ''
+    this.refreshUntil = 0
+    this.checkUntil = 0
     this.catalogLoading = false
     this.loadingMore = false
     this.catalogError = ''
@@ -31,6 +36,7 @@ export class PluginManager {
     this.incomplete = false
     this.installed = []
     this.updates = new Map()
+    this.updateIdentities = new Map()
     this.busy = false
     this.loading = false
     this.checking = false
@@ -45,15 +51,27 @@ export class PluginManager {
   isBusy() { return this.busy }
   blocksUpdates() { return this.busy || this.recoveryRequired }
 
+  getRateLimits() {
+    const limits = this.catalog.getRateLimitState?.() ?? {}
+    return { ...limits, refreshUntil: this.refreshUntil > this.now() ? this.refreshUntil : 0,
+      checkUntil: this.checkUntil > this.now() ? this.checkUntil : 0 }
+  }
+
+  limited(retryAt) {
+    this.changed()
+    return { ok: false, rateLimited: true, retryAt, message: '请求暂时冷却中，请等待倒计时结束后重试。' }
+  }
+
   getState() {
     const blocked = this.options.isBlocked?.() === true
     return {
       installedRuntime: Boolean(this.options.getRuntime()), loading: this.loading,
       busy: this.busy || blocked, checking: this.checking, checkedAt: this.checkedAt,
       recoveryRequired: this.recoveryRequired,
-      query: this.query, catalogLoading: this.catalogLoading, loadingMore: this.loadingMore,
+      query: this.query, catalogQuery: this.catalogQuery, rateLimits: this.getRateLimits(),
+      catalogLoading: this.catalogLoading, loadingMore: this.loadingMore,
       catalogError: this.catalogError, total: this.total, page: this.page,
-      hasMore: this.hasMore, limitReached: this.limitReached, incomplete: this.incomplete,
+      hasMore: this.hasMore && this.query === this.catalogQuery, limitReached: this.limitReached, incomplete: this.incomplete,
       progress: this.progress, error: this.error,
       notice: this.recoveryRequired ? '上次插件进程尚未确认退出，已暂停插件修改和客户端/Harness 重启更新。请退出后检查残留进程，再重新打开客户端。'
         : blocked ? '请等待 Harness 安装、启动或客户端重启操作结束后再管理插件。' : this.notice,
@@ -91,7 +109,18 @@ export class PluginManager {
   inventory() {
     const runtime = this.options.getRuntime()
     this.installed = runtime ? this.readInstalled({ runtime, dshHome: this.options.dshHome }).plugins : []
+    this.pruneUpdates()
     return this.installed
+  }
+
+  pruneUpdates() {
+    const identities = new Map(this.installed.map(item => [item.id, pluginIdentity(this.tracked(item))]))
+    for (const id of this.updates.keys()) {
+      if (!identities.has(id) || identities.get(id) !== this.updateIdentities.get(id)) {
+        this.updates.delete(id)
+        this.updateIdentities.delete(id)
+      }
+    }
   }
 
   readRecords() {
@@ -138,11 +167,18 @@ export class PluginManager {
 
   async refresh({ catalog = true, checkFresh = false } = {}) {
     if (this.disposed || this.busy) return Promise.resolve({ ok: false })
+    const limits = this.getRateLimits()
+    const retryAt = Math.max(catalog ? Math.max(this.refreshUntil, limits.searchUntil || 0) : 0,
+      checkFresh ? Math.max(this.checkUntil, limits.metadataUntil || 0) : 0)
+    if (retryAt > this.now()) return this.limited(retryAt)
+    // Reserve before awaiting either lane; IPC callers cannot bypass the UI cooldown.
+    if (catalog) this.refreshUntil = this.now() + MANUAL_REFRESH_COOLDOWN_MS
+    if (checkFresh) this.checkUntil = this.now() + MANUAL_REFRESH_COOLDOWN_MS
     const results = await Promise.all([
       this.refreshInstalled({ checkFresh }),
       ...(catalog ? [this.searchCatalog(this.query, { refresh: true })] : []),
     ])
-    return { ok: results.every(result => result.ok) }
+    return results.find(result => result.rateLimited) ?? { ok: results.every(result => result.ok) }
   }
 
   refreshInstalled({ checkFresh = false } = {}) {
@@ -153,8 +189,8 @@ export class PluginManager {
     this.refreshPromise = (async () => {
       try {
         this.inventory()
-        await this.checkInstalled({ refresh: checkFresh })
-        return { ok: !this.error }
+        const result = await this.checkInstalled({ refresh: checkFresh })
+        return result ?? { ok: !this.error }
       } catch {
         this.error = '无法读取 web 插件清单，请在运行日志中查看原因，或用 Harness 终端检查配置。'
         return { ok: false }
@@ -172,7 +208,7 @@ export class PluginManager {
     try { query = normalizePluginSearchQuery(input) } catch { return Promise.resolve({ ok: false }) }
     if (append) {
       // A stale renderer cannot append a page for an earlier query or choose arbitrary page numbers.
-      if (query !== this.query || this.catalogLoading || !this.hasMore || this.page < 1 || this.page >= 10) return Promise.resolve({ ok: false })
+      if (query !== this.query || query !== this.catalogQuery || this.catalogLoading || !this.hasMore || this.page < 1 || this.page >= 10) return Promise.resolve({ ok: false })
       if (this.loadingMore) return this.catalogPromise ?? Promise.resolve({ ok: false })
     } else if (!refresh && this.catalogLoading && query === this.query) {
       return this.catalogPromise ?? Promise.resolve({ ok: true })
@@ -182,14 +218,8 @@ export class PluginManager {
     this.catalogAbort = controller
     const revision = ++this.catalogRevision
     const page = append ? this.page + 1 : 1
-    if (query !== this.query) {
-      this.catalogItems = []
-      this.page = 0
-      this.total = 0
-      this.hasMore = false
-      this.limitReached = false
-      this.incomplete = false
-    }
+    // Keep the last successful result until its replacement succeeds. catalogQuery
+    // labels that snapshot so a blocked new query cannot advertise old matches.
     this.query = query
     this.catalogLoading = !append
     this.loadingMore = append
@@ -209,17 +239,22 @@ export class PluginManager {
             return true
           }).slice(0, 1000)
         this.page = page
+        this.catalogQuery = query
         this.total = Number.isSafeInteger(result.total) && result.total >= 0 ? result.total : this.catalogItems.length
         this.hasMore = result.hasMore === true && page < 10
         this.limitReached = result.limitReached === true
         this.incomplete = (append && this.incomplete) || result.incomplete === true
         this.notice = SOURCE_NOTICE
         return { ok: true }
-      } catch {
+      } catch (error) {
         if (!current()) return { ok: true, superseded: true }
+        if (isRateLimit(error, this.now())) {
+          this.catalogError = '搜索请求已暂停，已有结果已保留。请等待倒计时结束后重试。'
+          return this.limited(error.retryAt)
+        }
         this.catalogError = append
           ? '下一页暂时无法获取，已有结果已保留。请稍后点击“加载更多”重试，或检查系统代理。'
-          : '搜索暂时未完成，请检查系统代理或稍后重试。GitHub 请求限流时需要等待，不能据此判断没有匹配插件。'
+          : '搜索暂时未完成，已有结果已保留。请检查系统代理或稍后重试，不能据此判断没有匹配插件。'
         return { ok: false }
       } finally {
         if (current()) {
@@ -237,24 +272,41 @@ export class PluginManager {
 
   async checkInstalled({ refresh = false } = {}) {
     this.checking = true
-    this.updates.clear()
     this.changed()
+    let rateLimited
+    let failed = false
     try {
-      // A small worker pool avoids GitHub throttling and keeps the UI responsive.
+      // Concurrency is bounded; the catalog also enforces the actual request budget.
       const queue = [...this.installed]
+      this.pruneUpdates()
       await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => {
-        while (queue.length && !this.disposed) {
+        while (queue.length && !this.disposed && !rateLimited) {
           const item = queue.shift()
           let result = { status: 'unknown', reason: item.reason ?? '此来源暂不支持自动检测，请查看作者说明。' }
           if (item.managed) {
             try { result = await this.catalog.checkUpdate(this.tracked(item), { refresh }) }
-            catch { result = { status: 'unknown', reason: '检测失败，请检查网络或稍后重试。' } }
+            catch (error) {
+              if (isRateLimit(error, this.now())) {
+                rateLimited = this.limited(Math.max(rateLimited?.retryAt || 0, error.retryAt))
+                // Preserve any previously checked result; do not pretend a cooldown
+                // means a plugin is current, or erase useful manual-update actions.
+                if (!this.updates.has(item.id)) {
+                  this.updates.set(item.id, { status: 'unknown', reason: '检测已暂停，请等待冷却结束后再检查。' })
+                  this.updateIdentities.set(item.id, pluginIdentity(this.tracked(item)))
+                }
+                continue
+              }
+              failed = true
+              result = { status: 'unknown', reason: '检测失败，请检查网络或稍后重试。' }
+            }
           }
           this.updates.set(item.id, result)
+          this.updateIdentities.set(item.id, pluginIdentity(this.tracked(item)))
           this.changed()
         }
       }))
-      this.checkedAt = Date.now()
+      if (!rateLimited && !failed) this.checkedAt = this.now()
+      return rateLimited ?? { ok: !failed }
     } finally { this.checking = false }
   }
 
@@ -338,10 +390,16 @@ export class PluginManager {
       try { this.saveRecord(name, candidate) } catch { saved = false }
       this.inventory()
       this.updates.delete(name)
+      this.updateIdentities.delete(name)
       this.notice = `${label}完成。若 Harness 未即时生效，请结束任务后退出并重新打开客户端。${saved ? '' : '更新来源记录未保存，后续可能需要手动查看仓库更新。'}`
       this.progress = { label: `${label}完成`, detail: this.notice, percent: 100 }
       return { ok: true }
     } catch (error) {
+      if (!attempted && isRateLimit(error, this.now())) {
+        this.error = '插件来源检查暂时冷却中，未修改插件。请等待倒计时结束后重试。'
+        this.progress = null
+        return this.limited(error.retryAt)
+      }
       if (error.cleanupUncertain === true) this.recoveryRequired = true
       // Do not put CLI output, paths, tokens or stack traces in native dialogs/renderer state.
       this.error = attempted
@@ -351,6 +409,7 @@ export class PluginManager {
       this.progress = null
       try { this.inventory() } catch { /* Preserve last readable inventory. */ }
       this.updates.clear()
+      this.updateIdentities.clear()
       return { ok: false, message: this.error }
     } finally { this.busy = false; this.changed() }
   }
@@ -361,6 +420,15 @@ export class PluginManager {
     this.catalogAbort?.abort()
     this.catalog.dispose?.()
   }
+}
+
+function isRateLimit(error, now) {
+  return error?.code === 'PLUGIN_RATE_LIMIT' && Number.isFinite(error.retryAt) && error.retryAt > now
+}
+
+function pluginIdentity(item) {
+  return JSON.stringify([item.name, item.spec, item.version, item.source, item.managed,
+    item.repo, item.ref, item.commit, item.github?.owner, item.github?.repo, item.github?.ref, item.github?.commit])
 }
 
 function validRecord(value) {

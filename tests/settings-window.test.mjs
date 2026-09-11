@@ -119,8 +119,22 @@ describe('isolated client settings window', () => {
     const payload = window.webContents.messages.at(-1)[1]
     assert.equal(payload.harness.error, '操作未完成，请查看日志。')
     assert.equal(payload.plugins.error, '操作未完成，请查看日志。')
-    assert.equal(payload.plugins.catalogError, '目录搜索未完成，请检查系统代理或稍后重试；GitHub 可能暂时限流。')
+    assert.equal(payload.plugins.catalogError, '目录搜索未完成，请检查系统代理或稍后重试。已有结果不会被清除。')
     assert.doesNotMatch(JSON.stringify(payload), /private|token/u)
+    world.controller.update({ plugins: { catalogError: '搜索请求已暂停，已有结果已保留。请等待倒计时结束后重试。' } })
+    assert.equal(world.windows[0].webContents.messages.at(-1)[1].plugins.catalogError, '搜索请求已暂停，已有结果已保留。请等待倒计时结束后重试。')
+    world.controller.dispose()
+  })
+
+  it('handles a thrown structured plugin rate limit without exposing exception text', async () => {
+    const retryAt = Date.now() + 45_000
+    const world = fixture({ onAction: () => { throw Object.assign(new Error('token=private'), { code: 'PLUGIN_RATE_LIMIT', retryAt }) } })
+    world.controller.show('plugins')
+    await tick()
+    assert.deepEqual(await world.invoke(world.trustedEvent(), { type: 'plugins-refresh' }), {
+      ok: false, rateLimited: true, retryAt, message: '插件请求冷却中，请等待倒计时结束后重试。',
+    })
+    assert.deepEqual(world.logs, [])
     world.controller.dispose()
   })
 
@@ -168,6 +182,37 @@ describe('isolated client settings window', () => {
     await tick()
     assert.doesNotMatch(JSON.stringify(await rejected.invoke(rejected.trustedEvent(), { type: 'harness-check' })), /secret/u)
     rejected.controller.dispose()
+  })
+
+  it('passes only validated plugin cooldown deadlines and a fixed safe explanation', async () => {
+    const retryAt = Date.now() + 30_000
+    let reply = { ok: false, rateLimited: true, retryAt, message: 'token=private-reply', extra: 'secret' }
+    const world = fixture({ onAction: () => reply })
+    world.controller.show('plugins')
+    await tick()
+    for (const request of [{ type: 'plugins-refresh' }, { type: 'plugins-check' },
+      { type: 'plugins-search', query: '主题' }, { type: 'plugins-more', query: '' },
+      { type: 'plugin-install', id: 'npm:theme' }, { type: 'plugin-update', id: 'npm:theme' }]) {
+      assert.deepEqual(await world.invoke(world.trustedEvent(), request), {
+        ok: false, rateLimited: true, retryAt, message: '插件请求冷却中，请等待倒计时结束后重试。',
+      })
+    }
+    assert.equal((await world.invoke(world.trustedEvent(), { type: 'client-check' })).rateLimited, undefined)
+    assert.equal((await world.invoke(world.trustedEvent(), { type: 'plugin-remove', id: 'npm:theme' })).rateLimited, undefined)
+    for (const invalid of [undefined, null, 0, -1, Infinity, NaN, '123', {}, 1.5, 8.64e15 + 1]) {
+      reply = { ok: false, rateLimited: true, retryAt: invalid, message: 'private' }
+      assert.deepEqual(await world.invoke(world.trustedEvent(), { type: 'plugins-check' }), {
+        ok: false, message: '操作未完成，请重试或查看日志。',
+      })
+    }
+    reply = { ok: false, message: 'HTTP 403: private' }
+    assert.equal((await world.invoke(world.trustedEvent(), { type: 'plugins-refresh' })).rateLimited, undefined)
+    world.controller.update({ plugins: { rateLimits: { searchUntil: retryAt, metadataUntil: Infinity,
+      refreshUntil: 'private', checkUntil: -1, searchReason: 'token=private', metadataReason: 'private' } } })
+    const payload = world.windows[0].webContents.messages.at(-1)[1]
+    assert.deepEqual(payload.plugins.rateLimits, { searchUntil: retryAt, metadataUntil: 0, refreshUntil: 0, checkUntil: 0 })
+    assert.doesNotMatch(JSON.stringify(payload), /private|token/u)
+    world.controller.dispose()
   })
 
   it('denies navigation, subframes, popups, webviews and all permissions', async () => {

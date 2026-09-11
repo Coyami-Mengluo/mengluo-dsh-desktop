@@ -104,6 +104,8 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 4px
 .plugin-search input { width: 100%; min-width: 0; min-height: 36px; border-radius: 7px; border: 1px solid var(--border); background: var(--control); color: var(--text); padding: 8px 10px; }
 .plugin-search input::placeholder { color: var(--muted); }
 .plugin-search-hint { margin: -4px 0 10px; }
+.plugin-cooldown { margin: 0 0 12px; font-variant-numeric: tabular-nums; }
+.plugin-toolbar > button { font-variant-numeric: tabular-nums; }
 .plugin-pagination { display: grid; justify-items: center; gap: 10px; margin-top: 15px; text-align: center; }
 .plugin-pagination button { min-width: 120px; }
 .plugin-safety { margin-bottom: 14px; }

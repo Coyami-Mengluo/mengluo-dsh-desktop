@@ -1,4 +1,7 @@
 import { compareSemver, parseSemver } from './update-policy.mjs'
+import { PluginRateLimiter } from './plugin-rate-limit.mjs'
+
+export { PluginRateLimitError } from './plugin-rate-limit.mjs'
 
 const API = 'https://api.github.com'
 const REGISTRY = 'https://registry.npmjs.org'
@@ -7,6 +10,7 @@ const SEARCH_PAGE_SIZE = 100
 const SEARCH_MAX_PAGES = 10
 const MAX_JSON_BYTES = 2 * 1024 * 1024
 const MAX_MANIFEST_BYTES = 256 * 1024
+const MAX_ERROR_BYTES = 16 * 1024
 const CACHE_ENTRIES = 256
 const SHA = /^[a-f0-9]{40}$/iu
 const NPM_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u
@@ -40,6 +44,7 @@ export class PluginCatalog {
     this.timeoutMs = Math.max(1, Math.min(60_000, Number(timeoutMs) || 15_000))
     this.cacheTtlMs = Math.max(0, Math.min(60 * 60_000, Number(cacheTtlMs) || 0))
     this.cache = new Map()
+    this.rateLimiter = new PluginRateLimiter({ now })
     this.requests = new Set()
     this.disposed = false
   }
@@ -172,6 +177,7 @@ export class PluginCatalog {
     }
     const cached = this.cache.get(url)
     if (!refresh && cached && this.now() - cached.at < this.cacheTtlMs) return structuredClone(cached.value)
+    this.rateLimiter.dispatch(parsed)
     const controller = new AbortController()
     this.requests.add(controller)
     const timer = setTimeout(() => controller.abort(new Error('插件元数据请求超时。')), this.timeoutMs)
@@ -181,16 +187,28 @@ export class PluginCatalog {
         method: 'GET', redirect: 'error', credentials: 'omit', signal: combined,
         headers: { Accept: 'application/json', ...(parsed.origin === API ? { 'X-GitHub-Api-Version': '2022-11-28' } : {}) },
       })
+      if (combined.aborted || this.disposed) {
+        await response.body?.cancel?.().catch(() => {})
+        this.assertActive(combined)
+      }
       if (response.redirected || (response.url && new URL(response.url).origin !== parsed.origin)) {
         await response.body?.cancel?.().catch(() => {})
         throw new Error('插件元数据地址发生跳转，已停止请求。')
       }
       if (response.status !== 200) {
+        const headerRateError = this.rateLimiter.observe(parsed, response)
+        const evidence = (response.status === 403 || response.status === 429) && parsed.origin === API
+          ? await readRateEvidence(response, combined) : {}
+        this.assertActive(combined)
+        const rateError = this.rateLimiter.observe(parsed, response, evidence) ?? headerRateError
         await response.body?.cancel?.().catch(() => {})
-        if (response.status === 403 || response.status === 429) throw new Error('公开目录请求已限流，请稍后再检查。')
+        this.assertActive(combined)
+        if (rateError) throw rateError
+        if (response.status === 403) throw new Error('插件元数据访问被拒绝，请检查仓库是否公开。')
         if (response.status === 404) throw new Error('插件或目标版本尚未公开，请稍后重试或查看源码。')
         throw new Error(`插件元数据请求失败（HTTP ${Number(response.status) || 0}）。`)
       }
+      this.rateLimiter.observe(parsed, response)
       const value = await readJson(response, MAX_JSON_BYTES, combined)
       this.assertActive(combined)
       if (this.cache.size >= CACHE_ENTRIES) this.cache.delete(this.cache.keys().next().value)
@@ -207,11 +225,16 @@ export class PluginCatalog {
     signal?.throwIfAborted()
   }
 
+  getRateLimitState() {
+    return this.rateLimiter.getState()
+  }
+
   dispose() {
     this.disposed = true
     for (const controller of this.requests) controller.abort(new Error('插件目录已关闭。'))
     this.requests.clear()
     this.cache.clear()
+    this.rateLimiter.dispose()
   }
 }
 
@@ -307,6 +330,18 @@ function cleanText(value, max) {
 
 function record(value) { return value !== null && typeof value === 'object' && !Array.isArray(value) }
 function unknown(reason) { return { status: 'unknown', reason } }
+
+async function readRateEvidence(response, signal) {
+  // Only bounded error metadata is inspected; external text is never displayed or saved.
+  try {
+    const value = await readJson(response, MAX_ERROR_BYTES, signal)
+    const message = typeof value?.message === 'string' ? value.message : ''
+    return {
+      rateLimited: /\brate[ -]limit exceeded\b|\bexceeded (?:a |the )?(?:secondary )?rate[ -]limit\b|\babuse detection\b/iu.test(message),
+      secondary: /\bsecondary rate[ -]limit\b|\babuse detection\b/iu.test(message),
+    }
+  } catch { return {} }
+}
 
 async function readJson(response, limit, signal) {
   const announced = Number(response.headers?.get?.('content-length'))

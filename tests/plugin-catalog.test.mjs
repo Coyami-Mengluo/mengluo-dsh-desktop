@@ -300,18 +300,19 @@ describe('read-only plugin catalog', () => {
     first.items[0].name = 'mutated by consumer'
     assert.equal((await f.catalog.list()).items[0].name, 'dsh-bundle')
     assert.equal(f.calls.length, 1)
+    now = 1100
     await f.catalog.list({ refresh: true })
     assert.equal(f.calls.length, 2)
-    now = 301
+    now = 2101
     await f.catalog.list()
     assert.equal(f.calls.length, 3)
     f.catalog.dispose()
   })
 
-  it('does not cache failed requests and returns brief safe rate-limit errors', async () => {
+  it('does not cache denied requests or mislabel permission errors as rate limits', async () => {
     const f = fixture(() => new Response('private diagnostics'.repeat(3000), { status: 403 }))
-    await assert.rejects(f.catalog.list(), /限流/u)
-    await assert.rejects(f.catalog.list(), error => !error.message.includes('private diagnostics'))
+    await assert.rejects(f.catalog.list(), /访问被拒绝/u)
+    await assert.rejects(f.catalog.list(), error => error.code !== 'PLUGIN_RATE_LIMIT' && !error.message.includes('private diagnostics'))
     assert.equal(f.calls.length, 2)
     f.catalog.dispose()
   })
@@ -361,9 +362,13 @@ describe('read-only plugin catalog', () => {
 
 function fixture(value, options = {}) {
   const calls = []
+  let now = 1_000
   const catalog = new PluginCatalog({
+    now: () => now,
     fetch: async (url, init) => {
       calls.push([url, init])
+      // Ordinary catalog tests simulate a user pause; production rate defaults remain enabled.
+      now += 1_000
       const data = typeof value === 'function' ? await value(url, init) : value
       return data instanceof Response || data?.status ? data : Response.json(data)
     },

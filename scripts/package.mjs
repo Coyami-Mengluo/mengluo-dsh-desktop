@@ -57,7 +57,7 @@ for (const path of [
   'app.asar.unpacked/src/settings-window.mjs', 'app.asar.unpacked/src/settings-preload.cjs',
   'app.asar.unpacked/src/settings-controller.mjs', 'app.asar.unpacked/src/download-source.mjs',
   'app.asar.unpacked/src/plugin-manager.mjs', 'app.asar.unpacked/src/plugin-catalog.mjs',
-  'app.asar.unpacked/src/plugin-runtime.mjs',
+  'app.asar.unpacked/src/plugin-runtime.mjs', 'app.asar.unpacked/src/plugin-rate-limit.mjs',
   'app.asar.unpacked/assets/settings.html', 'app.asar.unpacked/assets/settings.css',
   'app.asar.unpacked/assets/settings.js',
 ]) {

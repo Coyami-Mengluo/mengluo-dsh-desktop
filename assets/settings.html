@@ -37,9 +37,11 @@
       <div id="plugins-operation" class="card plugin-operation" role="status" hidden><div class="card-heading"><h2 id="plugins-progress-label">正在处理插件…</h2><span id="plugins-progress-percent" class="badge" hidden></span></div><progress id="plugins-progress-meter" max="100" aria-label="插件操作进度"></progress><p id="plugins-progress-detail" class="detail"></p></div>
       <p id="plugins-error" class="notice plugin-error" role="alert" hidden>操作未完成，请重试或查看日志。</p>
       <p id="plugins-notice" class="notice" hidden></p>
+      <p id="plugins-metadata-cooldown" class="notice plugin-cooldown" role="status" aria-live="off" hidden></p>
       <div id="plugin-panel-store" role="tabpanel" aria-labelledby="plugin-tab-store">
         <div class="plugin-toolbar"><label class="plugin-search"><span class="sr-only">远程搜索插件名称、简介或 README</span><input id="plugin-search" type="search" maxlength="100" placeholder="远程搜索名称、简介或 README" aria-describedby="plugins-search-hint" autocomplete="off" spellcheck="false"></label><button id="plugins-refresh" data-action="plugins-refresh">刷新目录</button></div>
-        <p id="plugins-search-hint" class="section-note plugin-search-hint">支持中文、字母、数字和 . _ / -，不支持高级查询语法。输入后自动搜索，按 Enter 可立即搜索。</p>
+        <p id="plugins-search-hint" class="section-note plugin-search-hint">支持中文、字母、数字和 . _ / -，不支持高级查询语法。输入后自动搜索；请求冷却时可查看缓存，结束后按 Enter 重试。</p>
+        <p id="plugins-search-cooldown" class="notice plugin-cooldown" role="status" aria-live="off" hidden></p>
         <p class="section-note plugin-safety">社区目录收录不代表安全或兼容认证。插件可执行代码，请先查看作者和源码，安装前还需确认。</p>
         <p id="plugins-catalog-status" class="detail plugin-list-status" role="status">进入插件页面后加载社区目录。</p>
         <p id="plugins-catalog-error" class="notice plugin-error" role="alert" hidden></p>
@@ -48,6 +50,7 @@
       </div>
       <div id="plugin-panel-installed" role="tabpanel" aria-labelledby="plugin-tab-installed" hidden>
         <div class="plugin-toolbar"><div><h2>当前 web 配置的插件</h2><p id="plugins-checked-at" class="detail">只检查更新，不会自动安装。</p></div><button id="plugins-check" data-action="plugins-check">检查更新</button></div>
+        <p id="plugins-check-cooldown" class="notice plugin-cooldown" role="status" aria-live="off" hidden></p>
         <p class="section-note plugin-safety">更新和卸载由你确认；官方自带组件不会被移除。操作完成后按提示重启 Harness 生效。</p>
         <p id="plugins-installed-status" class="detail plugin-list-status" role="status">尚未读取已安装插件。</p>
         <div id="plugins-installed" class="plugin-list" aria-label="已安装插件"></div>

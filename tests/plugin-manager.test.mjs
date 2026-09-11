@@ -194,6 +194,66 @@ describe('plugin manager: detection is never an installation', () => {
     assert.equal((await world.manager.handleAction({ type: 'plugins-refresh' })).ok, false)
     assert.equal(world.disposals, 1)
   })
+
+  it('reserves a separate check cooldown, stops on metadata limits and does not claim a fresh successful check', async () => {
+    const world = fixture()
+    world.items.push(plugin())
+    await world.manager.refresh()
+    const checkedAt = world.manager.checkedAt
+    world.now += 1000
+    let requests = 0
+    const until = world.now + 120_000
+    world.catalog.checkUpdate = async () => {
+      requests += 1
+      throw Object.assign(new Error('private rate body'), { code: 'PLUGIN_RATE_LIMIT', retryAt: until })
+    }
+    const result = await world.manager.handleAction({ type: 'plugins-check' })
+    assert.equal(result.rateLimited, true)
+    assert.equal(world.manager.checkedAt, checkedAt)
+    assert.equal(world.manager.getState().installed[0].updateAvailable, true)
+    assert.equal(world.manager.getState().checking, false)
+    assert.equal(world.manager.getState().rateLimits.checkUntil, world.now + 30_000)
+    assert.doesNotMatch(JSON.stringify(result), /private rate body/u)
+    assert.equal((await world.manager.handleAction({ type: 'plugins-check' })).rateLimited, true)
+    assert.equal(requests, 1)
+    assert.equal(world.operations.length, 0)
+    world.catalog.getRateLimitState = () => ({ metadataUntil: until, searchUntil: 0 })
+    world.now += 30_000
+    assert.equal((await world.manager.handleAction({ type: 'plugins-check' })).retryAt, until)
+    assert.equal(requests, 1)
+  })
+
+  it('releases mutation locks after a source cooldown without confirmation or installation', async () => {
+    const world = fixture()
+    await world.manager.refresh()
+    world.catalog.resolve = async () => {
+      throw Object.assign(new Error('private'), { code: 'PLUGIN_RATE_LIMIT', retryAt: world.now + 60_000 })
+    }
+    const result = await world.manager.handleAction({ type: 'plugin-install', id: candidate().id })
+    assert.equal(result.rateLimited, true)
+    assert.equal(world.manager.isBusy(), false)
+    assert.equal(world.manager.getState().progress, null)
+    assert.equal(world.operations.length, 0)
+    assert.equal(world.confirmations.length, 0)
+    assert.doesNotMatch(JSON.stringify(result), /private/u)
+  })
+
+  it('does not preserve a prior update candidate after an external plugin replacement', async () => {
+    for (const changed of [{ version: '3.0.0' }, { spec: 'file:replacement' }, { source: 'npm' }, { managed: false }]) {
+      const world = fixture()
+      world.items.push(plugin())
+      await world.manager.refresh()
+      assert.equal(world.manager.getState().installed[0].updateAvailable, true)
+      Object.assign(world.items[0], changed)
+      world.catalog.checkUpdate = async () => {
+        throw Object.assign(new Error('limited'), { code: 'PLUGIN_RATE_LIMIT', retryAt: world.now + 60_000 })
+      }
+      await world.manager.handleAction({ type: 'plugins-check' })
+      assert.equal(world.manager.getState().installed[0].updateAvailable, false)
+      assert.equal(world.manager.getState().installed[0].availableVersion, undefined)
+      assert.equal(world.operations.length, 0)
+    }
+  })
 })
 
 function candidate() {
@@ -208,13 +268,13 @@ function plugin() {
 }
 function fixture() {
   const world = { root: mkdtempSync(join(tmpdir(), 'mengluo-plugin-manager-')), items: [], operations: [], links: [], proxyUrls: [],
-    changes: [], confirmations: [], choice: 0, blocked: false, runtime: { version: '0.1.5-rc.2' }, disposals: 0 }
+    changes: [], confirmations: [], choice: 0, blocked: false, runtime: { version: '0.1.5-rc.2' }, disposals: 0, now: 1_000_000 }
   world.catalog = {
     list: async ({ query = '', page = 1 } = {}) => ({ items: [{ ...candidate(), name: 'plugin-repo' }], query, page, total: 1, hasMore: false, truncated: false }),
     resolve: async () => candidate(), checkUpdate: async () => ({ status: 'available', candidate: candidate() }),
     dispose: () => { world.disposals += 1 },
   }
-  world.options = { userData: world.root, catalog: world.catalog, getRuntime: () => world.runtime, isBlocked: () => world.blocked,
+  world.options = { userData: world.root, catalog: world.catalog, now: () => world.now, getRuntime: () => world.runtime, isBlocked: () => world.blocked,
     readInstalled: () => ({ plugins: world.items.map(item => ({ ...item })) }),
     runOperation: async options => {
       world.operations.push(options)

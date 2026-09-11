@@ -14,6 +14,9 @@
   let pluginSearchEdited = false
   let pluginSearchRevision = 0
   let pluginSearchPending
+  let pluginCooldownTimer
+  let unloading = false
+  const pluginReplyLimits = {}
   let toastTimer
   const scrollPositions = new Map()
   const pluginListSignatures = new Map()
@@ -75,6 +78,92 @@
     if (query.split(' ').some(word => /^(?:AND|OR|NOT)$/iu.test(word))) return undefined
     const expression = query ? `topic:dsh-plugin archived:false fork:false ${query.split(' ').map(word => `"${word}"`).join(' ')} in:name,description,readme` : ''
     return expression.length > 256 ? undefined : query
+  }
+  const pluginDeadline = value => Number.isSafeInteger(value) && value > 0 && value <= 8.64e15 ? value : 0
+  const pluginRateLimits = () => {
+    const limits = latest.plugins?.rateLimits ?? {}
+    return Object.fromEntries(['searchUntil', 'metadataUntil', 'refreshUntil', 'checkUntil']
+      .map(key => [key, Math.max(pluginDeadline(limits[key]), pluginDeadline(pluginReplyLimits[key]))]))
+  }
+  const countdown = seconds => seconds >= 60 ? `${Math.floor(seconds / 60)}分${seconds % 60}秒` : `${seconds}秒`
+  function acceptPluginCooldown(request, result) {
+    const key = { 'plugins-search': 'searchUntil', 'plugins-more': 'searchUntil',
+      'plugins-refresh': 'refreshUntil', 'plugins-check': 'checkUntil',
+      'plugin-install': 'metadataUntil', 'plugin-update': 'metadataUntil' }[request.type]
+    if (!key || result?.ok !== false || result.rateLimited !== true || !pluginDeadline(result.retryAt)) return false
+    pluginReplyLimits[key] = Math.max(pluginDeadline(pluginReplyLimits[key]), result.retryAt)
+    return true
+  }
+  function pluginView() {
+    const plugins = latest.plugins ?? {}
+    const query = normalizedPluginQuery(byId('plugin-search').value)
+    const currentQuery = typeof plugins.query === 'string' ? plugins.query : ''
+    const catalogQuery = typeof plugins.catalogQuery === 'string' ? plugins.catalogQuery : currentQuery
+    const draftPending = pluginSearchComposing || query !== currentQuery
+    const catalogPending = plugins.catalogLoading || pluginSearchPending?.query === query
+    const operationBusy = plugins.busy || plugins.loading || plugins.checking || plugins.recoveryRequired
+      || latest.harness?.status === 'installing' || latest.client?.status === 'installing'
+      || ['plugin-install', 'plugin-update', 'plugin-remove'].some(type => busyActions.has(type))
+    return { plugins, query, currentQuery, catalogQuery, draftPending, catalogPending, operationBusy }
+  }
+  // Only local captions and controls change on each tick; cards, focus and scroll stay in place.
+  function renderPluginControls() {
+    const { plugins, query, currentQuery, catalogQuery, draftPending, catalogPending, operationBusy } = pluginView()
+    const catalog = pluginItems(plugins.catalog)
+    const installed = pluginItems(plugins.installed)
+    const queryInvalid = query === undefined
+    const limits = pluginRateLimits()
+    const now = Date.now()
+    for (const key of Object.keys(pluginReplyLimits)) if (pluginReplyLimits[key] <= now) delete pluginReplyLimits[key]
+    const seconds = until => Math.max(0, Math.ceil((until - now) / 1000))
+    const searchWait = seconds(limits.searchUntil)
+    const refreshWait = seconds(Math.max(limits.searchUntil, limits.refreshUntil))
+    const checkWait = seconds(Math.max(limits.metadataUntil, limits.checkUntil))
+    const metadataWait = seconds(limits.metadataUntil)
+    text('plugins-refresh', refreshWait ? `刷新目录（${countdown(refreshWait)}）` : plugins.catalogLoading ? '正在搜索…' : '刷新目录')
+    disable('plugins-refresh', refreshWait || operationBusy || plugins.catalogLoading || plugins.loadingMore || draftPending || busyActions.has('plugins-refresh'))
+    text('plugins-check', checkWait ? `检查更新（${countdown(checkWait)}）` : plugins.checking ? '正在检查…' : '检查更新')
+    disable('plugins-check', checkWait || operationBusy || !plugins.installedRuntime || !installed.length || busyActions.has('plugins-check'))
+    text('plugins-search-cooldown', searchWait
+      ? `目录请求冷却中，${countdown(searchWait)}后可再次请求。仍可输入关键词查看缓存；倒计时结束后请按 Enter 搜索或手动刷新。`
+      : refreshWait ? `刷新目录冷却中，${countdown(refreshWait)}后可手动刷新。仍可搜索和查看已有结果。` : '')
+    show('plugins-search-cooldown', Boolean(refreshWait))
+    text('plugins-check-cooldown', checkWait ? `更新检查冷却中，${countdown(checkWait)}后可手动检查。不会自动检查或安装更新。` : '')
+    show('plugins-check-cooldown', Boolean(checkWait))
+    text('plugins-metadata-cooldown', metadataWait ? `插件信息请求冷却中，${countdown(metadataWait)}后可重试需要读取版本信息的安装或更新。不会自动重试或安装。` : '')
+    show('plugins-metadata-cooldown', Boolean(metadataWait))
+    const total = Number.isSafeInteger(plugins.total) && plugins.total >= 0 ? plugins.total : catalog.length
+    const queryLabel = currentQuery ? `“${currentQuery}”` : '社区插件'
+    const catalogLabel = catalogQuery ? `“${catalogQuery}”` : '社区插件'
+    const retained = catalog.length && (draftPending || catalogPending || catalogQuery !== query || plugins.catalogError)
+      ? ` 当前保留${catalogLabel}的 ${catalog.length} 条结果。` : ''
+    text('plugins-catalog-status', (queryInvalid ? '搜索词格式不支持或关键词过多，请缩短并使用文字、数字、空格或 . _ / -。'
+      : pluginSearchComposing ? '正在输入，选字完成后开始搜索…'
+        : catalogPending ? `正在搜索${queryLabel}…`
+          : draftPending ? pluginSearchTimer ? '等待搜索新关键词…' : '关键词尚未搜索，请按 Enter 搜索。'
+            : plugins.catalogError || catalogQuery !== currentQuery ? '搜索未完成，可按 Enter 重试或手动刷新目录。'
+              : catalog.length ? `${catalogLabel}：GitHub 匹配 ${total} 个，已加载 ${catalog.length} 个${plugins.loadingMore ? ' · 正在加载更多…' : ''}`
+                : plugins.page > 0 ? '没有匹配的插件，试试其他关键词。' : '暂无插件，请点击刷新目录。') + retained)
+    byId('plugin-search').setAttribute('aria-invalid', String(queryInvalid))
+    byId('plugins-catalog').setAttribute('aria-busy', String(Boolean(catalogPending || plugins.loadingMore)))
+    show('plugins-catalog', true)
+    show('plugins-catalog-error', Boolean(plugins.catalogError && !plugins.catalogLoading))
+    text('plugins-catalog-error', pluginText(plugins.catalogError, 240))
+    show('plugins-more', Boolean((plugins.hasMore || plugins.loadingMore) && !draftPending && !queryInvalid && catalogQuery === query))
+    text('plugins-more', searchWait ? `加载更多（${countdown(searchWait)}）` : plugins.loadingMore ? '正在加载…' : plugins.catalogError ? '重试加载更多' : '加载更多')
+    disable('plugins-more', searchWait || !plugins.hasMore || catalogPending || plugins.loadingMore || draftPending || catalogQuery !== query || busyActions.has('plugins-more'))
+    text('plugins-catalog-limit', plugins.limitReached || total > 1000
+      ? 'GitHub 单次搜索最多展示 1000 条结果。请细化关键词，查找更多插件。'
+      : plugins.incomplete ? 'GitHub 本次搜索返回的结果可能不完整，可以稍后刷新重试。' : '')
+    show('plugins-catalog-limit', Boolean(!draftPending && (plugins.limitReached || total > 1000 || plugins.incomplete)))
+    const live = Object.values(limits).some(until => until > now)
+    if (live && !pluginCooldownTimer && !unloading) pluginCooldownTimer = setInterval(() => {
+      const content = byId('settings-content')
+      const scroll = content.scrollTop
+      renderPluginControls()
+      content.scrollTop = scroll
+    }, 1000)
+    else if (!live || unloading) { clearInterval(pluginCooldownTimer); pluginCooldownTimer = undefined }
   }
   function renderPluginList(id, items, installedItems, pluginState, operationBusy) {
     const isInstalledList = id === 'plugins-installed'
@@ -157,14 +246,7 @@
     const catalog = pluginItems(plugins.catalog)
     const installed = pluginItems(plugins.installed)
     if (!pluginSearchEdited && typeof plugins.query === 'string') byId('plugin-search').value = plugins.query
-    const query = normalizedPluginQuery(byId('plugin-search').value)
-    const currentQuery = typeof plugins.query === 'string' ? plugins.query : ''
-    const draftPending = pluginSearchComposing || query !== currentQuery
-    const queryInvalid = query === undefined
-    const catalogPending = draftPending || plugins.catalogLoading || pluginSearchPending?.query === query
-    const operationBusy = plugins.busy || plugins.loading || plugins.checking || plugins.recoveryRequired
-      || state.harness?.status === 'installing' || state.client?.status === 'installing'
-      || ['plugin-install', 'plugin-update', 'plugin-remove'].some(type => busyActions.has(type))
+    const { operationBusy } = pluginView()
     const progress = plugins.progress ?? {}
     show('plugins-runtime-notice', !plugins.installedRuntime)
     show('plugins-operation', Boolean(plugins.busy || plugins.progress))
@@ -179,35 +261,10 @@
     text('plugins-notice', pluginText(plugins.notice, 800))
     show('plugins-notice', Boolean(plugins.notice))
     text('plugin-installed-count', installed.length)
-    text('plugins-refresh', plugins.catalogLoading ? '正在搜索…' : '刷新目录')
-    disable('plugins-refresh', operationBusy || plugins.catalogLoading || plugins.loadingMore || draftPending || busyActions.has('plugins-refresh'))
-    text('plugins-check', plugins.checking ? '正在检查…' : '检查更新')
-    disable('plugins-check', operationBusy || !plugins.installedRuntime || !installed.length || busyActions.has('plugins-check'))
+    renderPluginControls()
     const checked = plugins.checkedAt ? new Date(plugins.checkedAt) : undefined
     text('plugins-checked-at', checked && Number.isFinite(checked.getTime())
       ? `上次检查：${checked.toLocaleString()} · 不会自动安装` : '只检查更新，不会自动安装。')
-    const total = Number.isSafeInteger(plugins.total) && plugins.total >= 0 ? plugins.total : catalog.length
-    const queryLabel = currentQuery ? `“${currentQuery}”` : '社区插件'
-    text('plugins-catalog-status', queryInvalid ? '搜索词格式不支持或关键词过多，请缩短并使用文字、数字、空格或 . _ / -。'
-      : pluginSearchComposing ? '正在输入，选字完成后开始搜索…'
-        : draftPending ? '等待搜索新关键词…'
-          : catalogPending ? `正在搜索${queryLabel}…${catalog.length ? ` 已保留 ${catalog.length} 条结果。` : ''}`
-            : plugins.catalogError ? `搜索未完成。${catalog.length ? `已保留 ${catalog.length} 条结果，可重试。` : '请稍后点击刷新目录重试。'}`
-              : catalog.length ? `${queryLabel}：GitHub 匹配 ${total} 个，已加载 ${catalog.length} 个${plugins.loadingMore ? ' · 正在加载更多…' : ''}`
-                : plugins.page > 0 ? '没有匹配的插件，试试其他关键词。' : '暂无插件，请点击刷新目录。')
-    byId('plugin-search').setAttribute('aria-invalid', String(queryInvalid))
-    byId('plugins-catalog').setAttribute('aria-busy', String(Boolean(catalogPending || plugins.loadingMore)))
-    show('plugins-catalog', !draftPending && !queryInvalid)
-    show('plugins-catalog-error', Boolean(plugins.catalogError && !draftPending && !plugins.catalogLoading))
-    text('plugins-catalog-error', '目录搜索未完成，请检查系统代理或稍后重试；GitHub 可能暂时限流。已有结果不会被清除。')
-    const moreVisible = plugins.hasMore || plugins.loadingMore
-    show('plugins-more', Boolean(moreVisible && !draftPending && !queryInvalid))
-    text('plugins-more', plugins.loadingMore ? '正在加载…' : plugins.catalogError ? '重试加载更多' : '加载更多')
-    disable('plugins-more', !plugins.hasMore || catalogPending || plugins.loadingMore || draftPending || busyActions.has('plugins-more'))
-    text('plugins-catalog-limit', plugins.limitReached || total > 1000
-      ? 'GitHub 单次搜索最多展示 1000 条结果。请细化关键词，查找更多插件。'
-      : plugins.incomplete ? 'GitHub 本次搜索返回的结果可能不完整，可以稍后刷新重试。' : '')
-    show('plugins-catalog-limit', Boolean(!draftPending && (plugins.limitReached || total > 1000 || plugins.incomplete)))
     text('plugins-installed-status', installed.length ? `共 ${installed.length} 个插件${installed.some(item => item.updateAvailable) ? `，${installed.filter(item => item.updateAvailable).length} 个可更新` : ''}`
       : plugins.loading ? '正在读取已安装插件…' : plugins.installedRuntime ? '当前配置还没有额外安装的插件。' : '安装 Harness 后可以在这里管理插件。')
     renderPluginList('plugins-catalog', catalog, installed, plugins, operationBusy)
@@ -318,7 +375,8 @@
     render(latest)
     try {
       const result = await api.action(request)
-      if (result?.ok !== true) toast('操作未完成，请重试或查看日志。')
+      if (acceptPluginCooldown(request, result)) { /* The inline countdown explains this expected response. */ }
+      else if (result?.ok !== true) toast('操作未完成，请重试或查看日志。')
       else if (['harness-preferences', 'client-preferences'].includes(request.type)) toast('设置已保存。')
       else if (request.type === 'download-source') toast('下载源已保存，仅影响后续安装和更新。')
     } catch { toast('暂时无法完成操作，请重新打开设置后重试。') }
@@ -332,14 +390,16 @@
     if (query === undefined) { render(latest); return }
     const plugins = latest.plugins ?? {}
     if (pluginSearchPending?.query === query && pluginSearchPending.revision === pluginSearchRevision) return
-    if (query === (plugins.query ?? '') && !plugins.catalogError && (plugins.page > 0 || plugins.catalogLoading)) return
+    if (query === (plugins.query ?? '') && query === (plugins.catalogQuery ?? plugins.query ?? '')
+      && !plugins.catalogError && (plugins.page > 0 || plugins.catalogLoading)) return
     const revision = pluginSearchRevision
     pluginSearchPending = { query, revision }
     render(latest)
     try {
       // Search requests deliberately bypass busyActions: a newer query must supersede an older request.
-      const result = await api.action({ type: 'plugins-search', query })
-      if (revision === pluginSearchRevision && result?.ok !== true) toast('搜索未完成，请稍后重试。')
+      const request = { type: 'plugins-search', query }
+      const result = await api.action(request)
+      if (revision === pluginSearchRevision && result?.ok !== true && !acceptPluginCooldown(request, result)) toast('搜索未完成，请稍后重试。')
     } catch {
       if (revision === pluginSearchRevision) toast('暂时无法搜索，请稍后重试。')
     } finally {
@@ -400,7 +460,12 @@
     event.preventDefault()
     void searchPlugins()
   })
-  window.addEventListener('beforeunload', () => { clearTimeout(pluginSearchTimer) })
+  window.addEventListener('beforeunload', () => {
+    unloading = true
+    clearTimeout(pluginSearchTimer)
+    clearInterval(pluginCooldownTimer)
+    pluginCooldownTimer = undefined
+  })
   const preferences = (id, type, key, check = false) => byId(id).addEventListener('change', event => {
     void act({ type, patch: { [key]: check ? event.target.checked : event.target.value } })
   })
