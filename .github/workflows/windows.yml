@@ -27,6 +27,8 @@ jobs:
       - run: npm run check:release
       - run: npm run smoke:setup
       - run: npm run smoke:settings
+      - run: npm run stage:node
+      - run: npm run stage:npm
       - run: npm run smoke:main
       - run: node scripts/smoke-main.mjs --snapshot-recovery
       - run: npm run smoke:tray
