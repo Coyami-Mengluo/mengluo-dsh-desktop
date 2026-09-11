@@ -46,6 +46,12 @@ async function run() {
         { id: 'github:example/local-theme', name: 'Git 来源主题', version: 'a12b456', managed: true, updateCheckStatus: 'unknown', updateCheckMessage: 'Git 来源暂时无法确定更新，请查看源码。', repositoryUrl: 'https://github.com/example/local-theme' },
       ],
       progress: null, error: undefined, notice: '插件操作使用当前 Harness 的 web 配置，完成后可能需要重启。',
+      snapshots: { loading: false, error: '', recoveryRequired: false, items: [
+        { id: '671d55b3-29ed-4bd2-b241-e68c755ef000', createdAt: '2026-09-11T10:00:00.000Z', action: 'update',
+          pluginName: '极光主题', status: 'success', runtimeVersion: '0.1.2-rc.1', bytes: 524288, files: 24 },
+        { id: 'c1d5fa50-f1ea-43f8-98c3-6e54a7d492d8', createdAt: '2026-09-10T10:00:00.000Z', action: 'remove',
+          pluginName: '示例工作流', status: 'failed', runtimeVersion: '0.1.2-rc.1', bytes: 262144, files: 18 },
+      ] },
     },
     about: { productName: 'MengLuo DSH Desktop', clientVersion: '0.5.6', harnessVersion: '0.1.2-rc.1', logAvailable: true },
   }
@@ -99,6 +105,7 @@ async function run() {
       if (request.type === 'client-preferences') Object.assign(state.client, request.patch)
       if (request.type === 'test-connection') state.network.probe = { status: 'success', detail: '模拟检测成功 · 响应时间 120 ms（未发起网络请求）' }
       if (request.type === 'plugins-check') state.plugins.checkedAt = '2026-09-10T10:00:00Z'
+      if (request.type === 'plugins-recover') state.plugins.snapshots.recoveryRequired = false
       controller.update(state)
     },
     log: message => logs.push(message),
@@ -318,6 +325,65 @@ async function run() {
   await pause(80)
   assert.equal(actions.filter(action => action.type === 'plugins-refresh').length, 1, 'Returning to the page does not re-fetch unnecessarily')
 
+  await contents.executeJavaScript("document.getElementById('plugin-tab-snapshots').click()")
+  await expect(() => actions.at(-1)?.type === 'plugins-snapshots')
+  await expectDom(contents, "document.querySelectorAll('#plugins-snapshots-list .snapshot-card').length === 2 && !document.querySelector('[data-action=plugin-restore]').disabled")
+  const snapshotId = state.plugins.snapshots.items[0].id
+  await contents.executeJavaScript("document.querySelector('[data-action=plugin-restore]').click()")
+  await expect(() => actions.at(-1)?.type === 'plugin-restore')
+  assert.deepEqual(actions.at(-1), { type: 'plugin-restore', id: snapshotId })
+  await expectDom(contents, "!document.querySelector('[data-action=plugin-restore]').disabled")
+  const beforeInvalidRestore = actions.length
+  for (const request of [{ type: 'plugin-restore', id: '../profile' }, { type: 'plugin-restore', id: snapshotId, path: 'profile' },
+    { type: 'plugins-recover', path: 'profile' }]) {
+    assert.equal((await contents.executeJavaScript(`window.clientSettings.action(${JSON.stringify(request)})`)).ok, false)
+  }
+  assert.equal(actions.length, beforeInvalidRestore)
+  state.plugins.snapshots.loading = true
+  controller.update(state)
+  await expectDom(contents, "document.getElementById('plugins-snapshots').disabled && document.querySelector('[data-action=plugin-restore]').disabled")
+  state.plugins.snapshots.loading = false
+  state.plugins.snapshots.items[0].status = 'pending'
+  state.plugins.snapshots.items[1].runtimeVersion = '0.1.1'
+  controller.update(state)
+  await expectDom(contents, "[...document.querySelectorAll('[data-action=plugin-restore]')].every(button => button.disabled)")
+  state.plugins.snapshots.items[0].status = 'success'
+  state.plugins.snapshots.items[1].runtimeVersion = '0.1.2-rc.1'
+  state.plugins.snapshots.error = 'token=private-snapshot-error'
+  state.plugins.snapshots.items[0].pluginName = '<img src=x onerror="window.snapshotInjected=true">'
+  controller.update(state)
+  await expectDom(contents, "!document.getElementById('plugins-snapshots-error').hidden && document.getElementById('plugins-snapshots-list').textContent.includes('<img')")
+  assert.equal(await contents.executeJavaScript("window.snapshotInjected === undefined && !document.querySelector('#plugins-snapshots-list img') && !document.body.textContent.includes('private-snapshot-error')"), true)
+  state.plugins.snapshots.items[0].pluginName = '极光主题'
+  state.plugins.snapshots.error = ''
+  state.plugins.snapshots.recoveryRequired = true
+  state.plugins.installedRuntime = false
+  controller.update(state)
+  await expectDom(contents, "!document.getElementById('plugins-recovery-notice').hidden && !document.getElementById('plugins-recover').disabled && [...document.querySelectorAll('[data-action=plugin-restore]')].every(button => button.disabled)")
+  assert.equal(await contents.executeJavaScript("[...document.querySelectorAll('[data-action=plugin-install],[data-action=plugin-update],[data-action=plugin-remove]')].every(button => button.disabled)"), true)
+  state.plugins.busy = true
+  controller.update(state)
+  await expectDom(contents, "document.getElementById('plugins-recover').disabled")
+  state.plugins.busy = false
+  controller.update(state)
+  await expectDom(contents, "!document.getElementById('plugins-recover').disabled")
+  await contents.executeJavaScript("document.getElementById('plugins-recover').click()")
+  await expect(() => actions.at(-1)?.type === 'plugins-recover')
+  await expectDom(contents, "document.getElementById('plugins-recovery-notice').hidden && document.querySelector('[data-action=plugin-restore]').disabled")
+  state.plugins.installedRuntime = true
+  controller.update(state)
+  await expectDom(contents, "!document.querySelector('[data-action=plugin-restore]').disabled")
+  await contents.executeJavaScript("document.querySelector('[data-action=plugin-restore]').focus(); window.focusedSnapshot = document.activeElement")
+  controller.update(state)
+  assert.equal(await contents.executeJavaScript("document.activeElement === window.focusedSnapshot && !window.focusedSnapshot.disabled"), true, 'Repeated snapshots preserve the active button')
+  state.plugins.snapshots.items[0].status = 'restored'
+  controller.update(state)
+  await expectDom(contents, "document.querySelectorAll('#plugins-snapshots-list .snapshot-card').length === 2 && document.querySelector('[data-action=plugin-restore]').disabled && document.querySelector('[data-action=plugin-restore]').textContent === '已恢复'")
+  state.plugins.snapshots.items[0].status = 'success'
+  controller.update(state)
+  await captureDocumentation(contents, window, state, layouts)
+  controller.update(state)
+
   window.setSize(680, 520)
   await pause(150)
   for (const theme of ['light', 'dark']) {
@@ -333,6 +399,9 @@ async function run() {
         await contents.executeJavaScript("document.getElementById('plugin-tab-store').click()")
         await checkLayout(contents, `plugins-store-narrow-${theme}`, layouts)
         await screenshot(contents, `plugins-store-narrow-${theme}`)
+        await contents.executeJavaScript("document.getElementById('plugin-tab-snapshots').click()")
+        await checkLayout(contents, `plugins-snapshots-narrow-${theme}`, layouts)
+        await screenshot(contents, `plugins-snapshots-narrow-${theme}`)
         await contents.executeJavaScript("document.getElementById('plugin-tab-installed').click()")
       }
     }
@@ -364,8 +433,37 @@ async function run() {
   assert.equal(ipcMain.listenerCount(SETTINGS_IPC.ready), 0)
   assert.deepEqual(logs, [])
   writeFileSync(join(screenshots, 'settings-smoke-result.json'), `${JSON.stringify({ passed: true, layouts, actions, isolatedProfile: true, realNetworkRequests: false }, null, 2)}\n`)
-  process.stdout.write('settings-smoke:passed (five sections, plugin discovery/manual actions, safe text, narrow layout, themes, real preload/actions, focus/scroll retention, hide/reopen, disposal; isolated mock data only)\n')
+  process.stdout.write('settings-smoke:passed (five sections, plugin discovery/manual actions, snapshots/restore/recovery IPC, safe text, narrow layout, themes, real preload/actions, focus/scroll retention, hide/reopen, disposal; isolated mock data only)\n')
   app.quit()
+}
+
+async function captureDocumentation(contents, window, state, layouts) {
+  const demo = structuredClone(state)
+  demo.harness.status = 'idle'
+  demo.harness.channel = 'auto'
+  demo.plugins.notice = '演示数据：以下插件名称与记录均为虚构示例。'
+  demo.plugins.catalog = [
+    { id: 'github:example/aurora-theme', name: '极光主题 · 示例', description: '柔和的夜间配色，让专注工作的界面更舒适。',
+      author: 'Example Studio', sourceLabel: '社区目录', version: '1.2.0', repositoryUrl: 'https://github.com/example/aurora-theme' },
+    { id: 'github:example/workflow', name: '工作流助手 · 示例', description: '整理常用步骤，为重复任务提供可复用的工作流程。',
+      author: 'Example Studio', sourceLabel: '社区目录', version: '2.1.0', installed: true, installedId: 'npm:@example/workflow', repositoryUrl: 'https://github.com/example/workflow' },
+  ]
+  Object.assign(demo.plugins, { total: 2, page: 1, query: '', catalogQuery: '', hasMore: false, catalogError: undefined,
+    rateLimits: {}, error: undefined, busy: false, loading: false, checking: false, progress: null })
+  window.setSize(1080, 860)
+  nativeTheme.themeSource = 'light'
+  controller.update(demo)
+  await contents.executeJavaScript("document.getElementById('plugin-search').value = ''; document.getElementById('toast').hidden = true")
+  for (const [name, section, pluginTab] of [['harness', 'harness'], ['plugins', 'plugins', 'store'], ['snapshots', 'plugins', 'snapshots']]) {
+    controller.show(section)
+    await expectDom(contents, `document.getElementById('panel-${section}').hidden === false`)
+    if (pluginTab) await contents.executeJavaScript(`document.getElementById('plugin-tab-${pluginTab}').click()`)
+    await contents.executeJavaScript("document.getElementById('settings-content').scrollTop = 0; document.getElementById('toast').hidden = true; document.activeElement?.blur()")
+    await pause(100)
+    await checkLayout(contents, `docs-${name}`, layouts)
+    assert.equal(await contents.executeJavaScript("/onerror|window\\.injected|private-|token=/.test(document.body.textContent)"), false, 'Documentation captures contain only clean fictional UI data')
+    writeFileSync(join(screenshots, `docs-${name}.png`), (await contents.capturePage()).toPNG())
+  }
 }
 
 async function checkLayout(contents, name, layouts) {

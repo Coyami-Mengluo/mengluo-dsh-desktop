@@ -11,7 +11,7 @@ describe('settings action contract', () => {
     for (const type of ['harness-check', 'harness-setup', 'harness-download', 'harness-restart', 'harness-progress',
       'terminal', 'client-check', 'client-download', 'client-install', 'client-progress',
       'open-log', 'open-repository', 'open-official', 'open-client-releases', 'test-connection',
-      'plugins-refresh', 'plugins-check']) {
+      'plugins-refresh', 'plugins-check', 'plugins-snapshots', 'plugins-recover']) {
       assert.equal(validateSettingsAction({ type }), true, type)
       assert.equal(validateSettingsAction({ type, url: 'https://untrusted.invalid' }), false, type)
     }
@@ -60,6 +60,17 @@ describe('settings action contract', () => {
       assert.equal(validateSettingsAction({ type, query: 'theme', page: 2 }), false)
       assert.equal(validateSettingsAction({ type, query: 'theme', url: 'https://untrusted.invalid' }), false)
     }
+  })
+  it('accepts an opaque snapshot UUID only, never a plugin identity, path or extra field', () => {
+    const id = '671d55b3-29ed-4bd2-b241-e68c755ef000'
+    assert.equal(validateSettingsAction({ type: 'plugin-restore', id }), true)
+    for (const invalid of ['npm:theme', '../snapshot', 'C:\\snapshot', 'https://example.invalid/snapshot',
+      '00000000-0000-0000-0000-000000000000', id.toUpperCase(), id.replace('-4bd2-', '-1bd2-'),
+      id + '/profile', id + '\n', '', null, {}, [id]]) {
+      assert.equal(validateSettingsAction({ type: 'plugin-restore', id: invalid }), false)
+    }
+    assert.equal(validateSettingsAction({ type: 'plugin-restore', id, path: 'profile' }), false)
+    assert.equal(validateSettingsAction({ type: 'plugin-restore' }), false)
   })
 })
 
@@ -135,6 +146,28 @@ describe('isolated client settings window', () => {
       ok: false, rateLimited: true, retryAt, message: '插件请求冷却中，请等待倒计时结束后重试。',
     })
     assert.deepEqual(world.logs, [])
+    world.controller.dispose()
+  })
+  it('projects only validated snapshot metadata across IPC and masks private strings', async () => {
+    const world = fixture()
+    world.controller.show('plugins')
+    await tick()
+    const item = { id: '671d55b3-29ed-4bd2-b241-e68c755ef000', createdAt: '2026-09-11T10:00:00.000Z',
+      action: 'update', status: 'success', pluginName: 'Example Theme', runtimeVersion: '0.1.2-rc.1', bytes: 4096, files: 8 }
+    world.controller.update({ plugins: { snapshots: { items: [
+      { ...item, path: 'private-file', manifest: { secret: 'private' } },
+      { ...item, id: '../profile' }, { ...item, action: 'restore' }, { ...item, createdAt: 'private-date' },
+      { ...item, pluginName: 'token=private', runtimeVersion: 'C:\\private', bytes: Infinity, files: -2 },
+      { ...item, status: 'restored' },
+    ], loading: true, error: 'private-file token=secret', recoveryRequired: true, path: 'private' } } })
+    const snapshots = world.windows[0].webContents.messages.at(-1)[1].plugins.snapshots
+    assert.deepEqual(snapshots, { items: [item, { ...item, pluginName: '插件', runtimeVersion: '', bytes: 0, files: 0 }, { ...item, status: 'restored' }],
+      loading: true, error: '本地快照暂时无法读取或恢复，请重试或查看日志。', recoveryRequired: true })
+    assert.doesNotMatch(JSON.stringify(snapshots), /private|token|secret/u)
+    await world.invoke(world.trustedEvent(), { type: 'plugin-restore', id: item.id })
+    await world.invoke(world.trustedEvent(), { type: 'plugins-snapshots' })
+    await world.invoke(world.trustedEvent(), { type: 'plugins-recover' })
+    assert.deepEqual(world.actions, [{ type: 'plugin-restore', id: item.id }, { type: 'plugins-snapshots' }, { type: 'plugins-recover' }])
     world.controller.dispose()
   })
 

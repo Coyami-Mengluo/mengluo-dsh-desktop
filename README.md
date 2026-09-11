@@ -1,8 +1,10 @@
 # MengLuo DSH Desktop
 
-English | [中文](README.zh.md)
+English | [中文](README.zh.md) | [Changelog](CHANGELOG.md)
 
 An unofficial, personal-maintainer Windows desktop client for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). This project is not affiliated with, sponsored by, or endorsed by DeepSeek. Harness provides the agent and its Web UI; this project provides installation, native windows, process supervision, and desktop integration.
+
+Current development version: **0.5.6 (unreleased)**. This README describes the development source; the latest published installer may have fewer features. See the [changelog](CHANGELOG.md) for public release history.
 
 ## Install and use
 
@@ -13,6 +15,22 @@ Closing the main window hides it to the tray. Right-click the tray, or press **C
 The short menu contains **Open Harness terminal**, **Client settings**, and **Quit**; the tray also provides **Show main window**. **View update progress** appears when progress is available. Closing the separate settings window hides it without stopping Harness.
 
 The transparent application icon is AI-generated artwork supplied by the maintainer, not an official DeepSeek logo. Artwork provenance and its separate terms are in [the artwork notice](assets/ARTWORK.md). The original MIT geometric SVG is retained as an alternative.
+
+## Screenshots
+
+These screenshots show the client's own settings page in **0.5.6 development (unreleased)** with isolated, fictional demonstration data. They do not show a user's profile or the official Harness conversation UI. See [screenshot provenance](docs/screenshots/README.md).
+
+Harness version and update settings:
+
+![Development 0.5.6 client settings: Harness, using demonstration data](docs/screenshots/harness.png)
+
+Community plugin store with fictional listings:
+
+![Development 0.5.6 plugin store with fictional plugin listings](docs/screenshots/plugins.png)
+
+Local plugin snapshots and manual rollback controls:
+
+![Development 0.5.6 installed plugins and snapshot controls, using demonstration data](docs/screenshots/snapshots.png)
 
 ## Client settings and download sources
 
@@ -32,7 +50,7 @@ npmmirror is a third-party service and may lag behind official releases. It is n
 
 ## Plugins
 
-**Client settings → Plugins** has a store and an installed-plugin view. The store searches public, non-archived, non-fork repositories carrying GitHub's [`dsh-plugin` topic](https://github.com/topics/dsh-plugin), ordered by recent updates. Keywords are sent to GitHub's repository search across names, descriptions and READMEs, rather than filtering only the currently loaded list. Results load in pages of up to 100; use **Load more** for subsequent pages. GitHub exposes at most 1,000 results per search and may return incomplete results, so narrow the keywords when prompted. Repositories without this topic are outside the store's search scope.
+**Client settings → Plugins** has a store, an installed-plugin view and local snapshots. The store searches public, non-archived, non-fork repositories carrying GitHub's [`dsh-plugin` topic](https://github.com/topics/dsh-plugin), ordered by recent updates. Keywords are sent to GitHub's repository search across names, descriptions and READMEs, rather than filtering only the currently loaded list. Results load in pages of up to 100; use **Load more** for subsequent pages. GitHub exposes at most 1,000 results per search and may return incomplete results, so narrow the keywords when prompted. Repositories without this topic are outside the store's search scope.
 
 Search input is debounced and recent query pages are cached to reduce anonymous API requests. Changing a query cancels or ignores stale responses so they cannot overwrite the newer results. A topic, listing or declared bundle is **not a security or compatibility certification**. Review the author, source, permissions, dependencies and license before installing; third-party plugins can execute code. Root packages that cannot be confirmed as installable Harness bundles require the author's manual installation instructions instead.
 
@@ -45,6 +63,16 @@ The installed view manages user-added plugins in the `web` profile. A GitHub plu
 Plugin tasks use the system proxy, show stage/activity information and bounded recent output, and have a 30-minute timeout. They do not invent a download percentage when the official CLI provides no reliable total. The Harness mirror selector applies only to managed Harness runtime downloads: it does not change a plugin's registry, global npm configuration or GitHub source.
 
 The client keeps minimal plugin-source bookkeeping (`plugin-sources.json`: package/spec, repository, tracking ref and commit) in its application profile, not in the official plugin configuration. It contains no credentials. Checking the store or updates sends search keywords and relevant public repository or npm package names to GitHub's API or official npm through the system proxy, without account credentials; it does not upload conversations or plugin configuration. Do not enter secrets in the store's search box. See [the plugin security boundary](SECURITY.md#plugin-boundary).
+
+### Local plugin snapshots and rollback
+
+Before a confirmed plugin installation, update or removal, the client copies and verifies the entire Harness `web` profile and its own `plugin-sources.json`. This includes the profile's dependency manifests, lockfiles, configuration and actual installed package files. If the snapshot cannot be created, the plugin command does not start. Snapshots stay in the local client profile and are not uploaded or included in source exports.
+
+In **Plugins → Local snapshots**, choose a snapshot and confirm rollback. This restores the **whole saved `web` environment**, including other plugins in that profile. The client temporarily stops Harness, so finish active tasks first. Restoration uses the saved files offline, without downloading packages or running installation scripts, and restarts Harness after a successful restore. It requires the same Harness version, a verified snapshot and a current profile/source record matching the recorded state after that operation. Later changes can make an older snapshot unavailable; the client will not silently overwrite them.
+
+Snapshots do not restore Harness runtime files, conversations, workspaces, other profiles or changes a plugin made outside the saved profile. Internal package-directory links are supported; external links and unsafe paths are refused. Normal retention targets the latest five completed snapshots. Incomplete or unverifiable copies and separate recovery copies may remain, so disk usage can exceed five snapshots. An interrupted rollback pauses further plugin changes and Harness startup until its retained transaction can be verified and repaired from the local snapshot controls.
+
+**Profile configuration can contain secrets. These backups are local and unencrypted.** Protect them like the live profile and keep snapshots, recovery copies and configuration out of issues, screenshots and public archives. See [snapshot security and recovery limits](SECURITY.md#local-plugin-snapshots).
 
 ## Two separate update paths
 

@@ -12,17 +12,43 @@ const SIMPLE_ACTIONS = new Set([
   'harness-check', 'harness-setup', 'harness-download', 'harness-restart', 'harness-progress',
   'terminal', 'client-check', 'client-download', 'client-install', 'client-progress',
   'open-log', 'open-repository', 'open-official', 'open-client-releases', 'test-connection',
-  'plugins-refresh', 'plugins-check',
+  'plugins-refresh', 'plugins-check', 'plugins-snapshots', 'plugins-recover',
 ])
 const PLUGIN_ACTIONS = new Set(['plugin-install', 'plugin-update', 'plugin-remove', 'plugin-source'])
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
   && [Object.prototype, null].includes(Object.getPrototypeOf(value))
 const hasOnly = (value, keys) => Object.keys(value).every(key => keys.includes(key))
+// Snapshot identities are opaque UUIDs, separate from registry/plugin identities.
+const snapshotId = value => typeof value === 'string'
+  && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value)
+const safeSnapshotText = (value, fallback) => typeof value === 'string' && value.length <= 160
+  && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]|(?:[a-z]:[\\/]|\\\\|https?:\/\/|token\s*[=:]|secret\s*[=:]|sk-[\w-]{24,}|gh[pousr]_[\w]{30,}|github_pat_)/iu.test(value)
+  ? value : fallback
+const safeSnapshotVersion = value => typeof value === 'string' && value.length < 80
+  && /^\d+\.\d+\.\d+(?:-[\da-z.-]+)?(?:\+[\da-z.-]+)?$/iu.test(value) ? value : ''
+function snapshotState(value) {
+  const source = isRecord(value) ? value : {}
+  return {
+    loading: source.loading === true, recoveryRequired: source.recoveryRequired === true,
+    error: source.error ? '本地快照暂时无法读取或恢复，请重试或查看日志。' : '',
+    items: (Array.isArray(source.items) ? source.items : []).filter(item => isRecord(item) && snapshotId(item.id)
+      && ['install', 'update', 'remove'].includes(item.action) && ['pending', 'success', 'failed', 'restored'].includes(item.status)
+      && typeof item.createdAt === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(item.createdAt)
+      && Number.isFinite(Date.parse(item.createdAt))).slice(0, 100).map(item => ({
+      id: item.id, createdAt: item.createdAt, action: item.action, status: item.status,
+      pluginName: safeSnapshotText(item.pluginName, '插件'), runtimeVersion: safeSnapshotVersion(item.runtimeVersion),
+      bytes: Number.isSafeInteger(item.bytes) && item.bytes >= 0 ? item.bytes : 0,
+      files: Number.isSafeInteger(item.files) && item.files >= 0 ? item.files : 0,
+    })),
+  }
+}
 
 /** A renderer can request fixed operations, never arbitrary paths, URLs or commands. */
 export function validateSettingsAction(request) {
   if (!isRecord(request) || !Object.hasOwn(request, 'type') || typeof request.type !== 'string') return false
   if (SIMPLE_ACTIONS.has(request.type)) return Object.keys(request).length === 1
+  if (request.type === 'plugin-restore') return Object.keys(request).length === 2
+    && hasOnly(request, ['type', 'id']) && snapshotId(request.id)
   if (['plugins-search', 'plugins-more'].includes(request.type)) {
     if (Object.keys(request).length !== 2 || !hasOnly(request, ['type', 'query'])) return false
     try { return normalizePluginSearchQuery(request.query) === request.query } catch { return false }
@@ -79,6 +105,7 @@ export function createSettingsWindow(options) {
         if (state[key]) state[key] = { ...state[key], error: state[key].error ? '操作未完成，请查看日志。' : undefined }
       }
       if (state.plugins) {
+        state.plugins.snapshots = snapshotState(state.plugins.snapshots)
         state.plugins.catalogError = safeCatalogMessages.has(state.plugins.catalogError) ? state.plugins.catalogError
           : state.plugins.catalogError ? '目录搜索未完成，请检查系统代理或稍后重试。已有结果不会被清除。' : undefined
         if (state.plugins.rateLimits) state.plugins.rateLimits = {

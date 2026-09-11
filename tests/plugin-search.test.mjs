@@ -339,7 +339,7 @@ function fixture() {
   }
   world.manager = new PluginManager({
     now: () => world.now,
-    userData: world.root, catalog: world.catalog, getRuntime: () => ({ version: 'fixture' }), isBlocked: () => false,
+    userData: world.root, dshHome: join(world.root, 'dsh'), catalog: world.catalog, getRuntime: () => ({ version: 'fixture' }), isBlocked: () => false,
     readInstalled: () => { world.reads += 1; return { plugins: [] } },
     runOperation: () => { world.mutations += 1; throw new Error('Unexpected mutation') },
     onChanged: () => { world.changes += 1 },

@@ -78,6 +78,7 @@ let settingsController
 let pluginManager
 let pluginQuitNotice
 let pluginRecoveryExitApproved = false
+let pluginBackendPaused = false
 
 preserveLegacyUserData()
 app.setName(PRODUCT_NAME)
@@ -252,11 +253,12 @@ async function startApplication() {
     dshHome: resolvePluginHome({ workspacePath }),
     catalog: new PluginCatalog({ fetch: (url, options) => net.fetch(url, options) }),
     getRuntime: () => updateManager.currentRuntime,
-    isBlocked: () => quitStarted || updateManager.installPromise !== undefined
+    isBlocked: () => quitStarted || pluginBackendPaused || startupFailureHandling || updateManager.installPromise !== undefined
       || updateManager.preparingVersion !== undefined || shellUpdateManager.state.status === 'installing'
       || (backend !== undefined && backendOrigin === undefined && !hasExited(backend)),
     npmCliPath: updaterNpmCliPath, terminalBinPath, workspacePath,
     resolveProxy: url => updateManager.resolveSystemProxy('Harness plugin', url),
+    withBackendStopped: withPluginBackendStopped,
     showMessage: options => settingsWindow?.window && !settingsWindow.window.isDestroyed()
       ? dialog.showMessageBox(settingsWindow.window, options) : dialog.showMessageBox(options),
     openExternal: openExternalUrl,
@@ -311,12 +313,14 @@ async function startApplication() {
       startBackend(runtime)
     },
   })
+  await pluginManager.refreshSnapshots()
   updateManager.start()
   shellUpdateManager.start()
   settingsController.refresh()
   await desktopWindow.loadShell()
   if (!mainWindow.isVisible()) mainWindow.show()
-  if (selectedRuntime === undefined) await firstRunSetup.show()
+  if (pluginManager.snapshotRecoveryRequired) showClientSettings('plugins')
+  else if (selectedRuntime === undefined) await firstRunSetup.show()
   else startBackend(selectedRuntime)
 }
 
@@ -339,6 +343,7 @@ function openExternalUrl(url) {
 
 /** Spawn the selected official CLI under its own standalone Node runtime. */
 function startBackend(runtime) {
+  if (quitStarted || pluginBackendPaused || pluginManager?.snapshotRecoveryRequired) return
   desktopWindow?.showLoading()
   const cliPath = runtime.cliPath
   if (!existsSync(runtime.nodePath)) {
@@ -382,12 +387,12 @@ function startBackend(runtime) {
   })
   child.on('error', (error) => {
     appendLog('desktop', `backend process error: ${error.message}\n`)
-    if (backend === child && backendOrigin === undefined) {
+    if (!pluginBackendPaused && backend === child && backendOrigin === undefined) {
       void handleBackendStartupFailure(`无法启动 Harness 后台：${error.message}`)
     }
   })
   void exit.then(({ code, signal }) => {
-    if (quitStarted || backend !== child) return
+    if (quitStarted || pluginBackendPaused || backend !== child) return
     const outcome = signal === null ? `退出码 ${String(code)}` : `信号 ${signal}`
     if (backendOrigin === undefined) {
       void handleBackendStartupFailure(`Harness 后台在启动时停止（${outcome}）。`)
@@ -430,7 +435,7 @@ function preserveLegacyUserData() {
  * @param {import('node:child_process').ChildProcess} child emitting process.
  */
 function acceptReadyUrl(readyUrl, child) {
-  if (backend !== child || backendOrigin !== undefined || failureShown) return
+  if (pluginBackendPaused || backend !== child || backendOrigin !== undefined || failureShown) return
   const ready = new URL(readyUrl)
   backendOrigin = ready.origin
   settingsController?.refresh()
@@ -448,11 +453,11 @@ async function loadReadyRenderer(host, readyUrl, child, runtime) {
   try {
     await host.loadOfficial(readyUrl)
     await new Promise(resolve => { setTimeout(resolve, RENDERER_STABILITY_MS) })
-    if (quitStarted || failureShown || backend !== child || host.window.isDestroyed()) return
+    if (quitStarted || pluginBackendPaused || failureShown || backend !== child || host.window.isDestroyed()) return
     updateManager?.runtimeReady(runtime)
     firstRunSetup?.complete()
   } catch (error) {
-    if (backend !== child || quitStarted) return
+    if (backend !== child || quitStarted || pluginBackendPaused) return
     await handleBackendStartupFailure(`无法载入 ${PRODUCT_NAME} 界面：${error instanceof Error ? error.message : String(error)}`)
   }
 }
@@ -460,7 +465,7 @@ async function loadReadyRenderer(host, readyUrl, child, runtime) {
 /** Contain shell and official renderer crashes according to their ownership. */
 function handleRendererGone(kind, details) {
   const window = mainWindow
-  if (quitStarted || window === undefined || window.isDestroyed() || details.reason === 'clean-exit') return
+  if (quitStarted || pluginBackendPaused || window === undefined || window.isDestroyed() || details.reason === 'clean-exit') return
   const reason = kind === 'official'
     ? `官方 Harness 界面进程意外退出（${details.reason}）。`
     : `桌面标题栏进程意外退出（${details.reason}）。`
@@ -470,7 +475,7 @@ function handleRendererGone(kind, details) {
 
 /** Stop a failed runtime before selecting a verified old slot or returning to installation. */
 async function handleBackendStartupFailure(reason) {
-  if (quitStarted || failureShown || startupFailureHandling) return
+  if (quitStarted || pluginBackendPaused || failureShown || startupFailureHandling) return
   startupFailureHandling = true
   clearStartupTimer()
   appendLog('desktop', `${reason}\n`)
@@ -593,6 +598,36 @@ function showFailure(reason) {
 function clearStartupTimer() {
   if (startupTimer !== undefined) clearTimeout(startupTimer)
   startupTimer = undefined
+}
+
+/** A restore must never swap live plugin files underneath the supervised backend. */
+async function withPluginBackendStopped(operation) {
+  if (quitStarted || pluginBackendPaused || startupFailureHandling || pluginManager?.recoveryRequired) throw new Error('plugin backend pause unavailable')
+  pluginBackendPaused = true
+  const runtime = selectedRuntime
+  let stopped = false
+  clearStartupTimer()
+  desktopWindow?.showLoading()
+  try {
+    await shutdownBackend()
+    stopped = true
+    backend = undefined
+    backendExit = undefined
+    backendOrigin = undefined
+    await operation()
+  } finally {
+    pluginBackendPaused = false
+    if (stopped && !quitStarted && !pluginManager?.snapshotRecoveryRequired) {
+      failureShown = false
+      startupFailureHandling = false
+      if (runtime) startBackend(runtime)
+      else await firstRunSetup?.show()
+    } else if (!stopped && backendOrigin !== undefined) {
+      // A failed shutdown did not authorize a file restore; keep the still-live UI accessible.
+      desktopWindow?.officialView.setVisible(true)
+    } else if (!quitStarted) showClientSettings('plugins')
+    settingsController?.refresh()
+  }
 }
 
 /** Ask the CLI to dispose, then terminate its recorded process tree on timeout. */

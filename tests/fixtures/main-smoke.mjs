@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, Menu, net } from 'electron'
 
-const [temporary, application, resources] = process.argv.slice(2)
+const [temporary, application, resources, recoveryArgument] = process.argv.slice(2)
+const snapshotRecovery = recoveryArgument === '--snapshot-recovery'
 for (const name of ['appData', 'documents', 'sessionData', 'dsh']) mkdirSync(join(temporary, name))
 app.setPath('appData', join(temporary, 'appData'))
 app.setPath('documents', join(temporary, 'documents'))
@@ -24,7 +25,16 @@ const buildMenu = Menu.buildFromTemplate
 Menu.buildFromTemplate = function (template) { menus.push(template); return buildMenu.call(this, template) }
 const fail = error => { process.stderr.write(`${error.stack ?? error}\n`); app.exit(1) }
 dialog.showErrorBox = (title, message) => fail(new Error(`${title}: ${message}`))
-dialog.showMessageBox = async (...args) => { throw new Error(`Unexpected native dialog: ${JSON.stringify(args.at(-1))}`) }
+let recoveryConfirmations = 0
+dialog.showMessageBox = async (...args) => {
+  const options = args.at(-1)
+  if (snapshotRecovery && options.title === '修复中断的插件回滚') {
+    assert.equal(options.defaultId, 1)
+    recoveryConfirmations += 1
+    return { response: 0 }
+  }
+  throw new Error(`Unexpected native dialog: ${JSON.stringify(options)}`)
+}
 // Keep both registries offline and disable client automatic checks in the isolated profile.
 // No official runtime or model is installed or executed by this fixture.
 const requests = []
@@ -50,7 +60,8 @@ app.on('will-quit', () => {
   clearTimeout(deadline)
   assert.equal(verified, true)
   assert.equal(BrowserWindow.getAllWindows().length, 0)
-  process.stdout.write('main-smoke:passed (isolated profile, compact menu, shared source, remote plugin search/pagination without runtime, local settings actions, X hides, clean quit)\n')
+  process.stdout.write(snapshotRecovery ? 'main-smoke:passed (isolated snapshot recovery and resumed first-run setup, clean quit)\n'
+    : 'main-smoke:passed (isolated profile, compact menu, shared source, remote plugin search/pagination without runtime, local settings actions, X hides, clean quit)\n')
 })
 async function waitFor(predicate) {
   const deadline = Date.now() + 10_000
@@ -63,13 +74,40 @@ async function waitFor(predicate) {
 }
 async function run() {
   await app.whenReady()
+  let snapshotStore
+  if (snapshotRecovery) {
+    const { PluginSnapshots } = await import(pathToFileURL(join(application, 'src', 'plugin-snapshots.mjs')).href)
+    snapshotStore = new PluginSnapshots({ userData: profile, dshHome: process.env.DSH_HOME,
+      fault: point => { if (point === 'afterRecordBackup') throw Object.assign(new Error('isolated crash'), { simulateCrash: true }) },
+    })
+    const snapshot = await snapshotStore.create({ runtimeVersion: '0.1.5-rc.2', action: 'install', pluginName: 'example-plugin' })
+    writeFileSync(join(profile, 'plugin-sources.json'), '{}')
+    await snapshotStore.markAfter(snapshot.id, { status: 'failed' })
+    await assert.rejects(snapshotStore.restore(snapshot.id), { code: 'SNAPSHOT_RECOVERY' })
+    assert.equal((await snapshotStore.getRecoveryState()).recoveryRequired, true)
+  }
   await import(pathToFileURL(join(application, 'src', 'main.mjs')).href)
+  if (snapshotRecovery) {
+    const recoverySettings = await waitFor(async () => {
+      const candidate = BrowserWindow.getAllWindows().find(item => item.webContents.getURL().endsWith('/settings.html'))
+      if (!candidate || candidate.webContents.isLoadingMainFrame()) return
+      return await candidate.webContents.executeJavaScript('Boolean(window.clientSettings)') ? candidate : undefined
+    })
+    // A pending transaction blocks startup instead of installing/starting over a partial profile.
+    assert.equal(requests.some(item => new URL(item.url).hostname === 'registry.npmjs.org'), false)
+    assert.deepEqual(await recoverySettings.webContents.executeJavaScript("window.clientSettings.action({ type: 'plugins-recover' })"), { ok: true })
+    assert.equal(recoveryConfirmations, 1)
+    assert.equal((await snapshotStore.getRecoveryState()).recoveryRequired, false)
+    assert.equal(readFileSync(join(profile, 'plugin-sources.json'), 'utf8'), '{}')
+    process.stdout.write('snapshot-startup-recovery:passed (isolated interrupted transaction, native confirmation, explicit repair, startup resumed)\n')
+  }
   const window = await waitFor(async () => {
     const candidate = BrowserWindow.getAllWindows().find(item => item.webContents.getURL().endsWith('/titlebar.html'))
     if (!candidate || candidate.webContents.isLoadingMainFrame()) return
     return await candidate.webContents.executeJavaScript("Boolean(document.getElementById('setup-status')?.textContent.includes('503'))") ? candidate : undefined
   })
   assert.equal(app.getPath('userData'), profile)
+  if (snapshotRecovery) { verified = true; app.quit(); return }
   const compact = menus.find(items => items.some(item => item.label === '客户端设置…'))
   assert.ok(compact)
   assert.deepEqual(compact.filter(item => item.label).map(item => item.label), ['打开 Harness 终端…', '客户端设置…', '退出'])

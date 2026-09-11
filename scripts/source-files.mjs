@@ -1,7 +1,7 @@
 import { lstatSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-const ROOT_FILES = new Set(['.gitignore', '.gitattributes', 'LICENSE', 'package.json', 'package-lock.json', 'README.md', 'README.zh.md', 'SECURITY.md', 'CONTRIBUTING.md', 'THIRD_PARTY_NOTICES.md'])
+const ROOT_FILES = new Set(['.gitignore', '.gitattributes', 'LICENSE', 'package.json', 'package-lock.json', 'README.md', 'README.zh.md', 'CHANGELOG.md', 'SECURITY.md', 'CONTRIBUTING.md', 'THIRD_PARTY_NOTICES.md'])
 const ROOT_DIRS = new Set(['src', 'assets', 'scripts', 'tests', 'licenses', 'docs', '.github'])
 const IGNORED_DIRS = new Set(['.git', 'node_modules', 'build', 'dist', 'coverage', '.idea', '.vscode'])
 const GENERATED = new Set(['assets/icon.png', 'assets/icon.ico'])

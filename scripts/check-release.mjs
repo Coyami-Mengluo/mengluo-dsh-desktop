@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import { listSourceFiles } from './source-files.mjs'
 import { SHELL_RELEASE_SOURCE } from '../src/release-config.mjs'
 import { ICON_SOURCE, verifyIconSource } from './icon-source.mjs'
+import { DOCUMENTATION_ASSETS, verifyDocumentationAsset } from './documentation-assets.mjs'
 
 const root = resolve(import.meta.dirname, '..')
 const files = listSourceFiles(root)
@@ -18,6 +19,7 @@ const violations = []
 for (const file of files) {
   const bytes = readFileSync(join(root, file))
   if (file === ICON_SOURCE) { verifyIconSource(bytes); continue }
+  if (Object.hasOwn(DOCUMENTATION_ASSETS, file)) { verifyDocumentationAsset(file, bytes); continue }
   if (bytes.includes(0)) { violations.push(`${file}: binary data is not an approved source asset`); continue }
   const lines = bytes.toString('utf8').split(/\r?\n/u)
   lines.forEach((line, index) => {
@@ -33,7 +35,7 @@ assert.deepEqual(lock.packages[''].dependencies, manifest.dependencies)
 assert.equal(manifest.repository.url, `https://github.com/${SHELL_RELEASE_SOURCE.owner}/${SHELL_RELEASE_SOURCE.repo}.git`)
 assert.equal(manifest.build.nsis.deleteAppDataOnUninstall, false)
 assert.equal(manifest.build.nsis.differentialPackage, true)
-for (const required of ['LICENSE', 'licenses/DeepSeek-Harness.LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', ICON_SOURCE, 'assets/ARTWORK.md']) assert.ok(files.includes(required))
+for (const required of ['LICENSE', 'licenses/DeepSeek-Harness.LICENSE', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'CHANGELOG.md', ICON_SOURCE, 'assets/ARTWORK.md', ...Object.keys(DOCUMENTATION_ASSETS)]) assert.ok(files.includes(required))
 for (const file of files.filter(name => name.endsWith('.md'))) {
   const markdown = readFileSync(join(root, file), 'utf8')
   for (const match of markdown.matchAll(/\]\(([^)]+)\)/gu)) {

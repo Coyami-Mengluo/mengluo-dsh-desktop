@@ -32,11 +32,13 @@
       <div class="plugin-tabs" role="tablist" aria-label="插件分类">
         <button id="plugin-tab-store" role="tab" aria-controls="plugin-panel-store" aria-selected="true" data-plugin-tab="store">商店</button>
         <button id="plugin-tab-installed" role="tab" aria-controls="plugin-panel-installed" aria-selected="false" tabindex="-1" data-plugin-tab="installed">已安装 <span id="plugin-installed-count">0</span></button>
+        <button id="plugin-tab-snapshots" role="tab" aria-controls="plugin-panel-snapshots" aria-selected="false" tabindex="-1" data-plugin-tab="snapshots">本地快照</button>
       </div>
       <div id="plugins-runtime-notice" class="notice" hidden>请先安装并启动 Harness，再安装或管理插件。</div>
       <div id="plugins-operation" class="card plugin-operation" role="status" hidden><div class="card-heading"><h2 id="plugins-progress-label">正在处理插件…</h2><span id="plugins-progress-percent" class="badge" hidden></span></div><progress id="plugins-progress-meter" max="100" aria-label="插件操作进度"></progress><p id="plugins-progress-detail" class="detail"></p></div>
       <p id="plugins-error" class="notice plugin-error" role="alert" hidden>操作未完成，请重试或查看日志。</p>
       <p id="plugins-notice" class="notice" hidden></p>
+      <div id="plugins-recovery-notice" class="notice plugin-error" role="alert" hidden><p>上次操作未完整结束，插件更改与快照恢复已暂停。请先修复中断的操作，再继续管理插件。</p><div class="actions"><button id="plugins-recover" data-action="plugins-recover">修复中断的恢复</button></div></div>
       <p id="plugins-metadata-cooldown" class="notice plugin-cooldown" role="status" aria-live="off" hidden></p>
       <div id="plugin-panel-store" role="tabpanel" aria-labelledby="plugin-tab-store">
         <div class="plugin-toolbar"><label class="plugin-search"><span class="sr-only">远程搜索插件名称、简介或 README</span><input id="plugin-search" type="search" maxlength="100" placeholder="远程搜索名称、简介或 README" aria-describedby="plugins-search-hint" autocomplete="off" spellcheck="false"></label><button id="plugins-refresh" data-action="plugins-refresh">刷新目录</button></div>
@@ -54,6 +56,14 @@
         <p class="section-note plugin-safety">更新和卸载由你确认；官方自带组件不会被移除。操作完成后按提示重启 Harness 生效。</p>
         <p id="plugins-installed-status" class="detail plugin-list-status" role="status">尚未读取已安装插件。</p>
         <div id="plugins-installed" class="plugin-list" aria-label="已安装插件"></div>
+      </div>
+      <div id="plugin-panel-snapshots" role="tabpanel" aria-labelledby="plugin-tab-snapshots" hidden>
+        <div class="plugin-toolbar"><div><h2>插件操作前的本地快照</h2><p class="detail">安装、更新或卸载前自动保存，保留最近的恢复点。</p></div><button id="plugins-snapshots" data-action="plugins-snapshots">刷新记录</button></div>
+        <div class="notice snapshot-scope">恢复会将整个 web 配置恢复到所选插件操作之前，包含当时的插件和配置；当前配置若已变化将拒绝覆盖。Harness 会短暂停止并重新启动，执行前还需在客户端确认。</div>
+        <p class="section-note plugin-safety">快照仅保存在本机，包含配置且未加密；不包含对话或工作区文件，也不能撤销插件已产生的文件改动、外部服务操作等副作用。</p>
+        <p id="plugins-snapshots-error" class="notice plugin-error" role="alert" hidden></p>
+        <p id="plugins-snapshots-status" class="detail plugin-list-status" role="status">尚未读取本地快照。</p>
+        <div id="plugins-snapshots-list" class="plugin-list" aria-label="插件操作前的快照"></div>
       </div>
     </section>
     <section id="panel-network" role="tabpanel" aria-labelledby="tab-network" tabindex="0" hidden>

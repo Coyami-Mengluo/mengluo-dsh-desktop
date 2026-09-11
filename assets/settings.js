@@ -9,6 +9,8 @@
   let lastSectionRevision = -1
   let pluginTab = 'store'
   let pluginsRequested = false
+  let snapshotsRequested = false
+  let snapshotSignature
   let pluginSearchTimer
   let pluginSearchComposing = false
   let pluginSearchEdited = false
@@ -58,7 +60,7 @@
     toastTimer = setTimeout(() => show('toast', false), 4200)
   }
   function choosePluginTab(next, focus = false) {
-    if (!['store', 'installed'].includes(next)) return
+    if (!['store', 'installed', 'snapshots'].includes(next)) return
     pluginTab = next
     for (const tab of document.querySelectorAll('[data-plugin-tab]')) {
       const selected = tab.dataset.pluginTab === next
@@ -67,10 +69,17 @@
       byId(`plugin-panel-${tab.dataset.pluginTab}`).hidden = !selected
       if (selected && focus) tab.focus()
     }
+    byId('settings-content').scrollTop = 0
+    if (next === 'snapshots' && !snapshotsRequested) {
+      snapshotsRequested = true
+      void act({ type: 'plugins-snapshots' })
+    }
   }
   const pluginItems = items => Array.isArray(items) ? items.filter(item => item && typeof item.id === 'string'
     && /^[A-Za-z0-9@][A-Za-z0-9@/_.:-]{0,239}$/u.test(item.id)).slice(0, 1000) : []
   const pluginText = (value, limit = 800) => typeof value === 'string' ? value.slice(0, limit) : ''
+  const snapshotId = value => typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(value)
   const normalizedPluginQuery = value => {
     if (typeof value !== 'string' || value.length > 100 || /[\u0000-\u001f\u007f-\u009f]/u.test(value)
       || /[^\p{L}\p{M}\p{N}\s._/-]/u.test(value)) return undefined
@@ -101,10 +110,74 @@
     const catalogQuery = typeof plugins.catalogQuery === 'string' ? plugins.catalogQuery : currentQuery
     const draftPending = pluginSearchComposing || query !== currentQuery
     const catalogPending = plugins.catalogLoading || pluginSearchPending?.query === query
-    const operationBusy = plugins.busy || plugins.loading || plugins.checking || plugins.recoveryRequired
+    const operationBusy = plugins.busy || plugins.loading || plugins.checking || plugins.recoveryRequired || plugins.snapshots?.recoveryRequired
       || latest.harness?.status === 'installing' || latest.client?.status === 'installing'
-      || ['plugin-install', 'plugin-update', 'plugin-remove'].some(type => busyActions.has(type))
+      || ['plugin-install', 'plugin-update', 'plugin-remove', 'plugin-restore', 'plugins-recover'].some(type => busyActions.has(type))
     return { plugins, query, currentQuery, catalogQuery, draftPending, catalogPending, operationBusy }
+  }
+  function renderSnapshots(plugins, operationBusy) {
+    const snapshots = plugins.snapshots ?? {}
+    const items = Array.isArray(snapshots.items) ? snapshots.items.filter(item => item && snapshotId(item.id)).slice(0, 100) : []
+    const loading = snapshots.loading || busyActions.has('plugins-snapshots')
+    const runtimeVersion = latest.about?.harnessVersion || latest.harness?.version
+    const repairBusy = plugins.busy || plugins.loading || plugins.checking || loading
+      || latest.harness?.status === 'installing' || latest.client?.status === 'installing'
+      || ['plugin-install', 'plugin-update', 'plugin-remove', 'plugin-restore', 'plugins-recover'].some(type => busyActions.has(type))
+    show('plugins-recovery-notice', Boolean(plugins.recoveryRequired || snapshots.recoveryRequired))
+    show('plugins-recover', Boolean(snapshots.recoveryRequired))
+    disable('plugins-recover', repairBusy)
+    text('plugins-snapshots', loading ? '正在读取…' : '刷新记录')
+    disable('plugins-snapshots', loading || plugins.busy || busyActions.has('plugin-restore') || busyActions.has('plugins-recover'))
+    show('plugins-snapshots-error', Boolean(snapshots.error))
+    text('plugins-snapshots-error', snapshots.error ? '本地快照暂时无法读取或恢复，请重试或查看日志。' : '')
+    text('plugins-snapshots-status', loading ? '正在读取本地快照…'
+      : items.length ? `共 ${items.length} 个操作前快照 · 恢复仅适用于相同 Harness 版本`
+        : snapshots.error ? '读取未完成，请重试。' : '暂无本地快照。通过客户端安装、更新或卸载插件时会自动创建。')
+    byId('plugins-snapshots-list').setAttribute('aria-busy', String(Boolean(loading)))
+    const signature = JSON.stringify([items, operationBusy, loading, plugins.installedRuntime, runtimeVersion])
+    if (signature === snapshotSignature) return
+    snapshotSignature = signature
+    const container = byId('plugins-snapshots-list')
+    const focusedId = container.contains(document.activeElement) ? document.activeElement.dataset.snapshotId : undefined
+    const scroll = byId('settings-content').scrollTop
+    const create = (tag, className, value) => {
+      const element = document.createElement(tag)
+      if (className) element.className = className
+      if (value !== undefined) element.textContent = value
+      return element
+    }
+    container.replaceChildren(...items.map(item => {
+      const action = { install: '安装', update: '更新', remove: '卸载' }[item.action] || '操作'
+      const status = { pending: '操作未完成', success: '操作成功', failed: '操作失败', restored: '已恢复' }[item.status] || '状态未知'
+      const card = create('article', 'card plugin-card snapshot-card')
+      const heading = create('div', 'card-heading')
+      const title = create('div')
+      title.append(create('h2', '', `${action}「${pluginText(item.pluginName, 160) || '插件'}」之前`))
+      const date = new Date(item.createdAt)
+      const timestamp = create('time', '', Number.isFinite(date.getTime()) ? date.toLocaleString() : '时间未知')
+      if (Number.isFinite(date.getTime())) timestamp.dateTime = date.toISOString()
+      title.append(timestamp)
+      const label = create('span', 'badge', status)
+      label.dataset.tone = item.status === 'success' ? 'good' : item.status === 'failed' ? 'error' : ''
+      heading.append(title, label)
+      const meta = create('div', 'plugin-meta')
+      meta.append(create('span', '', `Harness ${version(item.runtimeVersion)}`),
+        create('span', '', `${Number.isSafeInteger(item.files) && item.files >= 0 ? item.files : 0} 个文件 · ${bytes(item.bytes)}`))
+      const compatible = typeof runtimeVersion === 'string' && item.runtimeVersion === runtimeVersion
+      const completed = ['success', 'failed'].includes(item.status)
+      const explanation = item.status === 'restored' ? '此快照已恢复，不会重复执行恢复。' : !completed ? '原操作尚未完成，此快照暂不可恢复。'
+        : !compatible ? '当前 Harness 版本与快照不一致，暂不可恢复。' : '恢复此操作之前的整个 web 配置。'
+      const controls = create('div', 'actions')
+      const button = create('button', '', item.status === 'restored' ? '已恢复' : '恢复此快照')
+      button.dataset.action = 'plugin-restore'
+      button.dataset.snapshotId = item.id
+      button.disabled = Boolean(operationBusy || loading || !plugins.installedRuntime || !compatible || !completed)
+      controls.append(button)
+      card.append(heading, meta, create('p', 'detail', explanation), controls)
+      return card
+    }))
+    byId('settings-content').scrollTop = scroll
+    if (focusedId) [...container.querySelectorAll('button')].find(button => button.dataset.snapshotId === focusedId && !button.disabled)?.focus({ preventScroll: true })
   }
   // Only local captions and controls change on each tick; cards, focus and scroll stay in place.
   function renderPluginControls() {
@@ -269,6 +342,7 @@
       : plugins.loading ? '正在读取已安装插件…' : plugins.installedRuntime ? '当前配置还没有额外安装的插件。' : '安装 Harness 后可以在这里管理插件。')
     renderPluginList('plugins-catalog', catalog, installed, plugins, operationBusy)
     renderPluginList('plugins-installed', installed, installed, plugins, operationBusy)
+    renderSnapshots(plugins, operationBusy)
     // Metadata reads temporarily lock mutations without rebuilding otherwise unchanged cards.
     for (const button of document.querySelectorAll('button[data-plugin-id]')) {
       if (['plugin-install', 'plugin-update', 'plugin-remove'].includes(button.dataset.action)) {
@@ -278,7 +352,7 @@
   }
   function render(state) {
     latest = state
-    for (const button of document.querySelectorAll('button[data-action]:not([data-plugin-id])')) button.disabled = false
+    for (const button of document.querySelectorAll('button[data-action]:not([data-plugin-id]):not([data-snapshot-id])')) button.disabled = false
     document.documentElement.dataset.theme = state.theme === 'dark' ? 'dark' : 'light'
     if (Number.isInteger(state.sectionRevision) && state.sectionRevision !== lastSectionRevision) {
       lastSectionRevision = state.sectionRevision
@@ -435,6 +509,10 @@
       if (query !== undefined && query === (latest.plugins?.query ?? '')) void act({ type: 'plugins-more', query })
       return
     }
+    if (button.dataset.action === 'plugin-restore') {
+      if (snapshotId(button.dataset.snapshotId)) void act({ type: 'plugin-restore', id: button.dataset.snapshotId })
+      return
+    }
     void act({ type: button.dataset.action, ...(button.dataset.pluginId ? { id: button.dataset.pluginId } : {}) })
   })
   for (const tab of document.querySelectorAll('[data-plugin-tab]')) {
@@ -442,8 +520,10 @@
     tab.addEventListener('keydown', event => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
       event.preventDefault()
-      choosePluginTab(event.key === 'Home' ? 'store' : event.key === 'End' ? 'installed'
-        : pluginTab === 'store' ? 'installed' : 'store', true)
+      const names = ['store', 'installed', 'snapshots']
+      const index = names.indexOf(pluginTab)
+      choosePluginTab(names[event.key === 'Home' ? 0 : event.key === 'End' ? names.length - 1
+        : (index + (event.key === 'ArrowRight' ? 1 : -1) + names.length) % names.length], true)
     })
   }
   byId('plugin-search').addEventListener('input', queuePluginSearch)

@@ -40,6 +40,7 @@ export function verifyArtifacts() {
   assert.deepEqual(packaged.dependencies, manifest.dependencies)
   for (const file of ['src/main.mjs', 'src/release-config.mjs', 'src/shell-updater.mjs',
     'src/plugin-manager.mjs', 'src/plugin-catalog.mjs', 'src/plugin-rate-limit.mjs', 'src/plugin-runtime.mjs',
+    'src/plugin-snapshots.mjs',
     'src/settings-window.mjs', 'src/settings-controller.mjs', 'assets/settings.js',
     'assets/settings.html', 'assets/settings.css',
     'src/shell-update-window.mjs', 'src/shell-update-preload.cjs', 'assets/shell-update.js',

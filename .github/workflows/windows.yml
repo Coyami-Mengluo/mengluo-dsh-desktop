@@ -27,6 +27,8 @@ jobs:
       - run: npm run check:release
       - run: npm run smoke:setup
       - run: npm run smoke:settings
+      - run: npm run smoke:main
+      - run: node scripts/smoke-main.mjs --snapshot-recovery
       - run: npm run smoke:tray
       - run: npm run smoke:client-update
       - name: Build unsigned review artifacts (manual run only)

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
@@ -256,6 +256,164 @@ describe('plugin manager: detection is never an installation', () => {
   })
 })
 
+describe('plugin snapshot coordination', () => {
+  it('requires a completed backup before dispatching a plugin command', async () => {
+    const world = fixture()
+    await world.manager.refresh()
+    world.manager.snapshots.create = async () => { throw new Error('private backup path') }
+    assert.equal((await world.manager.handleAction({ type: 'plugin-install', id: candidate().id })).ok, false)
+    assert.equal(world.operations.length, 0)
+    assert.equal(world.manager.isBusy(), false)
+    assert.doesNotMatch(world.manager.error, /private backup path/u)
+  })
+
+  it('does not create snapshots on browsing, detection or cancelled confirmation', async () => {
+    const world = fixture()
+    await world.manager.refresh()
+    await world.manager.refreshSnapshots()
+    world.choice = 1
+    await world.manager.handleAction({ type: 'plugin-install', id: candidate().id })
+    assert.deepEqual(await world.manager.snapshots.list(), [])
+    assert.equal(existsSync(join(world.root, 'plugin-snapshots')), false)
+  })
+
+  it('restores real dependency bytes, config and source records after a failed command, without any registry calls', async () => {
+    const world = fixture()
+    const profile = seedProfile(world)
+    const config = join(profile, 'settings.json')
+    const dependency = join(profile, 'node_modules', 'example-plugin', 'index.js')
+    world.manager.runOperation = async options => {
+      world.operations.push(options)
+      writeFileSync(config, 'changed config')
+      writeFileSync(dependency, 'changed dependency')
+      writeFileSync(join(world.root, 'plugin-sources.json'), '{}')
+      throw new Error('isolated CLI failure')
+    }
+    await world.manager.refresh()
+    assert.equal((await world.manager.handleAction({ type: 'plugin-install', id: candidate().id })).ok, false)
+    const [snapshot] = world.manager.getState().snapshots.items
+    assert.equal(snapshot.status, 'failed')
+    assert.equal(readFileSync(dependency, 'utf8'), 'changed dependency')
+    let paused = false
+    world.options.withBackendStopped = async work => {
+      assert.equal(world.manager.isBusy(), true)
+      paused = true
+      await work()
+      assert.equal(world.manager.snapshotRecoveryRequired, false)
+      paused = false
+    }
+    const restore = world.manager.snapshots.restore.bind(world.manager.snapshots)
+    world.manager.snapshots.restore = async id => { assert.equal(paused, true); return restore(id) }
+    world.catalog.resolve = world.catalog.checkUpdate = world.options.resolveProxy = async () => { throw new Error('unexpected network') }
+    assert.equal((await world.manager.handleAction({ type: 'plugin-restore', id: snapshot.id })).ok, true)
+    assert.equal(readFileSync(config, 'utf8'), 'original config')
+    assert.equal(readFileSync(dependency, 'utf8'), 'original dependency')
+    assert.equal(existsSync(join(world.root, 'plugin-sources.json')), false)
+    assert.equal(readFileSync(join(world.root, 'dsh', 'conversation.json'), 'utf8'), 'untouched conversation fixture')
+    assert.equal(world.operations.length, 1)
+    assert.equal(world.manager.isBusy(), false)
+    assert.match(world.confirmations.at(-1).detail, /整个 web profile/u)
+    assert.equal(world.confirmations.at(-1).defaultId, 1)
+  })
+
+  it('refuses runtime mismatch and later edits without overwriting files', async () => {
+    const world = fixture()
+    const profile = seedProfile(world)
+    await world.manager.refresh()
+    assert.equal((await world.manager.handleAction({ type: 'plugin-install', id: candidate().id })).ok, true)
+    const [snapshot] = world.manager.getState().snapshots.items
+    let pauses = 0
+    world.options.withBackendStopped = async work => { pauses += 1; await work() }
+    world.runtime = { version: '99.0.0' }
+    assert.equal((await world.manager.handleAction({ type: 'plugin-restore', id: snapshot.id })).ok, false)
+    assert.equal(pauses, 0)
+    world.runtime = { version: snapshot.runtimeVersion }
+    writeFileSync(join(profile, 'settings.json'), 'external edit')
+    assert.equal((await world.manager.handleAction({ type: 'plugin-restore', id: snapshot.id })).ok, false)
+    assert.equal(readFileSync(join(profile, 'settings.json'), 'utf8'), 'external edit')
+    assert.equal(world.manager.snapshotRecoveryRequired, false)
+    assert.equal(world.operations.length, 1)
+  })
+
+  it('cancelled restore or failed backend shutdown never swaps the profile', async () => {
+    const world = fixture()
+    await world.manager.refresh()
+    await world.manager.handleAction({ type: 'plugin-install', id: candidate().id })
+    const [snapshot] = world.manager.getState().snapshots.items
+    let attempts = 0
+    world.manager.snapshots.restore = async () => { attempts += 1 }
+    world.options.withBackendStopped = async () => { throw new Error('backend still active') }
+    world.choice = 1
+    assert.equal((await world.manager.handleAction({ type: 'plugin-restore', id: snapshot.id })).cancelled, true)
+    world.choice = 0
+    assert.equal((await world.manager.handleAction({ type: 'plugin-restore', id: snapshot.id })).ok, false)
+    assert.equal(attempts, 0)
+    assert.equal(world.manager.isBusy(), false)
+  })
+
+  it('does not offer an unfinished process snapshot for restore or repair while process cleanup is uncertain', async () => {
+    const world = fixture()
+    await world.manager.refresh()
+    world.manager.runOperation = async () => { throw Object.assign(new Error('timeout'), { cleanupUncertain: true }) }
+    await world.manager.handleAction({ type: 'plugin-install', id: candidate().id })
+    const [snapshot] = world.manager.getState().snapshots.items
+    assert.equal(snapshot.status, 'pending')
+    world.options.withBackendStopped = async () => { throw new Error('must not pause') }
+    assert.equal((await world.manager.handleAction({ type: 'plugin-restore', id: snapshot.id })).ok, false)
+    assert.equal((await world.manager.handleAction({ type: 'plugins-recover' })).ok, false)
+    assert.equal(world.manager.blocksUpdates(), true)
+  })
+
+  it('requires explicit confirmation to repair a pending journal, and refreshes recovery before backend resume', async () => {
+    const world = fixture()
+    let pending = true, repairs = 0
+    world.manager.snapshots = {
+      getRecoveryState: async () => ({ recoveryRequired: pending }), list: async () => [],
+      recover: async () => { repairs += 1; pending = false },
+    }
+    await world.manager.refreshSnapshots()
+    assert.equal(world.manager.blocksUpdates(), true)
+    world.options.withBackendStopped = async work => {
+      assert.equal(world.manager.snapshotRecoveryRequired, true)
+      await work()
+      assert.equal(world.manager.snapshotRecoveryRequired, false)
+    }
+    world.choice = 1
+    assert.equal((await world.manager.handleAction({ type: 'plugins-recover' })).cancelled, true)
+    assert.equal(repairs, 0)
+    world.choice = 0
+    assert.equal((await world.manager.handleAction({ type: 'plugins-recover' })).ok, true)
+    assert.equal(repairs, 1)
+    assert.equal(world.manager.blocksUpdates(), false)
+  })
+
+  it('projects persistent recovery to the backend gate even when restore throws', async () => {
+    const world = fixture()
+    await world.manager.refresh()
+    await world.manager.handleAction({ type: 'plugin-install', id: candidate().id })
+    const [snapshot] = world.manager.getState().snapshots.items
+    let pending = false
+    world.manager.snapshots.getRecoveryState = async () => ({ recoveryRequired: pending })
+    world.manager.snapshots.restore = async () => { pending = true; throw new Error('interrupted swap') }
+    world.options.withBackendStopped = async work => {
+      try { await work() } finally { assert.equal(world.manager.snapshotRecoveryRequired, true) }
+    }
+    assert.equal((await world.manager.handleAction({ type: 'plugin-restore', id: snapshot.id })).ok, false)
+    assert.equal(world.manager.blocksUpdates(), true)
+    assert.equal(world.manager.isBusy(), false)
+  })
+})
+
+function seedProfile(world) {
+  const profile = join(world.root, 'dsh', 'profiles', 'web')
+  mkdirSync(join(profile, 'node_modules', 'example-plugin'), { recursive: true })
+  writeFileSync(join(profile, 'package.json'), JSON.stringify({ dependencies: {} }))
+  writeFileSync(join(profile, 'settings.json'), 'original config')
+  writeFileSync(join(profile, 'node_modules', 'example-plugin', 'index.js'), 'original dependency')
+  writeFileSync(join(world.root, 'dsh', 'conversation.json'), 'untouched conversation fixture')
+  return profile
+}
+
 function candidate() {
   return { id: 'github:example/plugin-repo', name: 'example-plugin', version: '1.1.0', source: 'github',
     spec: `github:example/plugin-repo#${'b'.repeat(40)}`, repo: 'example/plugin-repo', ref: 'main', commit: 'b'.repeat(40),
@@ -274,7 +432,7 @@ function fixture() {
     resolve: async () => candidate(), checkUpdate: async () => ({ status: 'available', candidate: candidate() }),
     dispose: () => { world.disposals += 1 },
   }
-  world.options = { userData: world.root, catalog: world.catalog, now: () => world.now, getRuntime: () => world.runtime, isBlocked: () => world.blocked,
+  world.options = { userData: world.root, dshHome: join(world.root, 'dsh'), catalog: world.catalog, now: () => world.now, getRuntime: () => world.runtime, isBlocked: () => world.blocked,
     readInstalled: () => ({ plugins: world.items.map(item => ({ ...item })) }),
     runOperation: async options => {
       world.operations.push(options)
