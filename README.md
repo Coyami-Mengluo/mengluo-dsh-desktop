@@ -4,7 +4,7 @@ English | [中文](README.zh.md) | [Changelog](CHANGELOG.md)
 
 An unofficial, personal-maintainer Windows desktop client for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). This project is not affiliated with, sponsored by, or endorsed by DeepSeek. Harness provides the agent and its Web UI; this project provides installation, native windows, process supervision, and desktop integration.
 
-Current development version: **0.5.6 (unreleased)**. This README describes the development source; the latest published installer may have fewer features. See the [changelog](CHANGELOG.md) for public release history.
+Current version: **0.5.6**. See the [changelog](CHANGELOG.md) for public release history.
 
 ## Install and use
 

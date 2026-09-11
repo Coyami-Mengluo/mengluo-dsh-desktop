@@ -1,19 +1,17 @@
 # Changelog / 更新日志
 
-This log records user-facing changes and public releases. Version 0.5.6 is in development and has not been published. Internal versions 0.5.3 and 0.5.4 were not public releases.
+This log records client features, improvements, fixes and public releases. Internal versions 0.5.3 and 0.5.4 were not public releases.
 
-本日志记录实际功能变化和公开版本。0.5.6 仍在开发中，尚未发布；0.5.3、0.5.4 为内部版本，不列为公开发布。
+本日志记录客户端新增功能、改进、修复和公开版本。0.5.3、0.5.4 为内部版本，不列为公开发布。
 
-## 0.5.6 — Unreleased / 未发布
+## 0.5.6
 
 - Unified plugin-search request protection in the main process: search, pagination and refresh share 8 dispatches per rolling 60 seconds, with at least a 1-second gap. Manual refresh and plugin update checks each have a 30-second cooldown. The settings page displays countdowns and retains cached or previous results for manual retry.
 - Added verified local snapshots before plugin changes and confirmed offline rollback of the complete `web` profile and client source records, with checks for changed files and interrupted-restore recovery. Backups include configuration and package files and remain unencrypted on the user's device.
-- Added maintainer-provided README screenshots, release history and documentation of development-version and source-publication boundaries.
 - Fixed snapshot path validation incorrectly rejecting ordinary Windows short-path aliases.
 
 - 统一主进程中的插件搜索请求保护：搜索、翻页和刷新共用每滚动 60 秒 8 次额度，两次发送至少间隔 1 秒；手动刷新和插件更新检查各有 30 秒冷却。设置页显示倒计时，并保留缓存或旧结果供用户手动重试。
 - 新增插件修改前的本地校验快照，以及用户确认后的整个 `web` profile 和客户端来源记录离线回滚，包含文件变化检查与中断回滚修复。备份包含配置和软件包文件，以未加密形式保存在用户设备上。
-- 补充维护者提供的 README 实际截图、公开版本更新日志，以及开发版本和源码发布边界说明。
 - 修复插件快照路径检查误拒绝 Windows 正常短路径别名的问题。
 
 ## 0.5.5
