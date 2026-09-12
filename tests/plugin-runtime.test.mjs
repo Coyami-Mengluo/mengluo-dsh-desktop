@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -8,7 +8,8 @@ import { describe, it } from 'node:test'
 import { classifyPluginSpec, createPluginCommand, isPluginPackageName, readInstalledPlugins, resolvePluginHome, runPluginOperation, sanitizePluginOutput } from '../src/plugin-runtime.mjs'
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), 'dsh-plugin-runtime-'))
+  // Inventory containment is intentional; resolve macOS's system TEMP alias in the fixture.
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-plugin-runtime-')))
   const runtimeRoot = join(root, 'runtime slot')
   const dshHome = join(root, 'isolated-home')
   const profileDir = join(dshHome, 'profiles', 'web')
