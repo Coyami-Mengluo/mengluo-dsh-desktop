@@ -68,7 +68,7 @@ describe('official runtime smoke policy', () => {
     assert.throws(() => { assertOfficialHarnessResponse(200, '<title>MengLuo AI</title>') }, /official DeepSeek Harness/u)
   })
 
-  it('runs a bounded alloc/view Koffi probe under the candidate Node and root', () => {
+  it('runs a bounded alloc/view Koffi probe under the candidate Node and root', { skip: process.platform !== 'win32' && 'Windows candidate executable and drive paths' }, () => {
     let invocation
     probeKoffiRuntime({
       executable: 'C:\\runtime\\node.exe',

@@ -32,6 +32,7 @@ const digest = bytes => createHash('sha512').update(bytes).digest('base64')
 const blockSize = 64 * 1024
 const oldBlocks = [1, 2, 3, 4].map(value => Buffer.alloc(blockSize, value))
 const newBlocks = [oldBlocks[0], oldBlocks[1], Buffer.alloc(blockSize, 5), oldBlocks[3]]
+const windowsOnly = { skip: process.platform !== 'win32' && 'NSIS uses the Windows installer and latest.yml update channel' }
 const map = blocks => ({ version: '2', files: [{ name: 'file', offset: 0,
   checksums: blocks.map(digest), sizes: blocks.map(block => block.length) }] })
 
@@ -95,7 +96,7 @@ async function fixture(t, options = {}) {
   return { updater, stats, payload }
 }
 
-test('real NSIS differential download transfers only changed blocks and verifies the complete result', async t => {
+test('real NSIS differential download transfers only changed blocks and verifies the complete result', windowsOnly, async t => {
   const f = await fixture(t)
   const [path] = await f.updater.downloadUpdate()
   assert.deepEqual(readFileSync(path), f.payload)
@@ -105,7 +106,7 @@ test('real NSIS differential download transfers only changed blocks and verifies
   assert.equal(f.stats.downloaded, 1)
 })
 
-test('real NSIS downloader falls back to full download when the old installer is absent', async t => {
+test('real NSIS downloader falls back to full download when the old installer is absent', windowsOnly, async t => {
   const f = await fixture(t, { noCache: true })
   const [path] = await f.updater.downloadUpdate()
   assert.deepEqual(readFileSync(path), f.payload)
@@ -113,7 +114,7 @@ test('real NSIS downloader falls back to full download when the old installer is
   assert.equal(f.stats.downloaded, 1)
 })
 
-test('a server that ignores byte ranges falls back to a verified complete installer', async t => {
+test('a server that ignores byte ranges falls back to a verified complete installer', windowsOnly, async t => {
   const f = await fixture(t, { ignoreRanges: true })
   const [path] = await f.updater.downloadUpdate()
   assert.deepEqual(readFileSync(path), f.payload)
@@ -121,7 +122,7 @@ test('a server that ignores byte ranges falls back to a verified complete instal
   assert.equal(f.stats.downloaded, 1)
 })
 
-test('corrupt differential and full downloads both fail the real SHA-512 gate', async t => {
+test('corrupt differential and full downloads both fail the real SHA-512 gate', windowsOnly, async t => {
   const f = await fixture(t, { corrupt: true })
   await assert.rejects(f.updater.downloadUpdate(), /sha512 checksum mismatch/iu)
   assert.equal(f.stats.downloaded, 0)

@@ -2,7 +2,7 @@
 
 Start with the concise [architecture overview](docs/ARCHITECTURE.md) for shell/runtime ownership, the two updater paths, plugin recovery, and trust boundaries.
 
-Portable source tests can also run on Linux/macOS with `npm ci --ignore-scripts` and `npm test`. Windows-specific cases are skipped there; native smoke tests, staging and packaging still require Windows x64. The portable CI only checks source: it never builds or publishes installers. Passing it does not mean the desktop application supports Linux/macOS.
+Portable source tests can also run on Linux/macOS with `npm ci --ignore-scripts`, `npm run prepare:icon` and `npm test`. Windows-specific cases are skipped there; native smoke tests, staging and packaging still require Windows x64. The portable CI only checks source: it never builds or publishes installers. Passing it does not mean the desktop application supports Linux/macOS.
 
 Use Windows x64 and Node.js 24.19.0. Install the locked development dependencies with `npm ci --ignore-scripts`, then run `npm run prepare:electron` and `npm run prepare:icon`. Dependency installation scripts are disabled; the explicitly invoked Electron downloader uses its pinned package checksums.
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
@@ -537,7 +537,7 @@ function plugin() {
     github: { owner: 'example', repo: 'plugin-repo', commit: 'a'.repeat(40) } }
 }
 function fixture() {
-  const world = { root: mkdtempSync(join(tmpdir(), 'mengluo-plugin-manager-')), items: [], operations: [], links: [], proxyUrls: [],
+  const world = { root: realpathSync.native(mkdtempSync(join(tmpdir(), 'mengluo-plugin-manager-'))), items: [], operations: [], links: [], proxyUrls: [],
     changes: [], confirmations: [], choice: 0, blocked: false, runtime: { version: '0.1.5-rc.2' }, disposals: 0, now: 1_000_000 }
   world.catalog = {
     list: async ({ query = '', page = 1 } = {}) => ({ items: [{ ...candidate(), name: 'plugin-repo' }], query, page, total: 1, hasMore: false, truncated: false }),

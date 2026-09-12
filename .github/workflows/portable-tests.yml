@@ -24,5 +24,6 @@ jobs:
           node-version: '24.19.0'
           package-manager-cache: false
       - run: npm ci --ignore-scripts
+      - run: npm run prepare:icon
       - run: npm test
       - run: npm run check:release

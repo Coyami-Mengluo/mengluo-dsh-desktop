@@ -14,7 +14,8 @@ afterEach(async () => {
 })
 
 async function fixture({ populated = true, fault, onProgress } = {}) {
-  const root = await fs.mkdtemp(path.join(tmpdir(), 'plugin-snapshots-fixture-'))
+  // macOS /var is a system alias; fixtures use its physical path, not a symlink ancestor.
+  const root = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), 'plugin-snapshots-fixture-')))
   roots.push(root)
   const userData = path.join(root, 'shell'), dshHome = path.join(root, 'harness')
   const profile = path.join(dshHome, 'profiles', 'web'), record = path.join(userData, 'plugin-sources.json')
