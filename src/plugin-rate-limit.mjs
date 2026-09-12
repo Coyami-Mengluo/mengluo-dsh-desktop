@@ -6,14 +6,15 @@ const SEARCH_GAP = 1_000
 const MAX_DATE = 8_640_000_000_000_000
 
 const REASONS = Object.freeze({
-  searchLocal: '搜索请求较频繁，请稍后再试。',
-  metadataLocal: '插件元数据检查较频繁，请稍后再试。',
-  searchServer: 'GitHub 搜索请求已限流，请稍后再试。',
-  metadataServer: 'GitHub 元数据请求已限流，请稍后再试。',
-  github: 'GitHub 请求已限流，请稍后再试。',
-  npm: 'npm 插件检查已限流，请稍后再试。',
+  searchLocal: '客户端搜索保护：每分钟最多 8 次请求，间隔至少 1 秒。',
+  metadataLocal: '客户端插件检查保护：每小时最多 50 次 GitHub 元数据请求，不影响目录搜索。',
+  searchServer: 'GitHub 搜索额度已用完，等待服务端额度重置。',
+  metadataServer: 'GitHub 插件信息额度已用完，不影响目录搜索。',
+  github: 'GitHub 临时限流：搜索和插件信息请求均需等待。',
+  npm: 'npm 临时限流：插件信息检查需等待，不影响目录搜索。',
 })
 const SAFE_REASONS = new Set(Object.values(REASONS))
+export const safeRateLimitReason = value => SAFE_REASONS.has(value) ? value : ''
 
 export class PluginRateLimitError extends Error {
   constructor(retryAt, reason, now = Date.now()) {
@@ -58,11 +59,12 @@ export class PluginRateLimiter {
 
     if (kind === 'npm') {
       if (!limited || response.status !== 429) return undefined
-      this.cooldownResponse(response, 'npm', Math.max(retry, reset), now)
+      this.cooldownResponse(response, 'npm', retry, now)
     } else if (limited) {
-      // Secondary/unspecified throttling applies to every GitHub API endpoint.
-      const scope = evidence.secondary === true || !exhausted ? 'github' : `${kind}Server`
-      this.cooldownResponse(response, scope, Math.max(retry, reset), now)
+      // Reset describes the primary bucket, not a secondary Retry-After. GitHub
+      // sends reset headers even with quota remaining: do not turn 60s into 1h.
+      if (exhausted) this.cooldownResponse(response, `${kind}Server`, Math.max(retry, reset), now)
+      if (evidence.secondary === true || !exhausted) this.cooldownResponse(response, 'github', retry, now)
     } else if (response.status === 200 && exhausted) {
       this.cooldownResponse(response, `${kind}Server`, Math.max(retry, reset), now)
       return undefined

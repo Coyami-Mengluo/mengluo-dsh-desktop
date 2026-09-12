@@ -102,11 +102,11 @@ describe('plugin metadata request protection', () => {
     }
   })
 
-  it('honors Retry-After seconds, HTTP dates and the later valid reset deadline', async () => {
+  it('honors Retry-After seconds and HTTP dates independently of primary reset', async () => {
     for (const headers of [
       { 'retry-after': '120' },
       { 'retry-after': new Date(START + 2 * MINUTE).toUTCString() },
-      { 'retry-after': '10', 'x-ratelimit-reset': String((START + 2 * MINUTE) / 1_000) },
+      { 'retry-after': '120', 'x-ratelimit-remaining': '59', 'x-ratelimit-reset': String((START + HOUR) / 1_000) },
     ]) {
       const f = fixture(() => Response.json({ message: 'private diagnostics' }, { status: 429, headers }))
       await rejectsRate(f.catalog.json(SEARCH), START + 2 * MINUTE)
@@ -115,6 +115,33 @@ describe('plugin metadata request protection', () => {
       assert.equal(f.calls.length, 1)
       f.catalog.dispose()
     }
+  })
+
+  it('does not turn a 60-second secondary limit into a 40-minute catalog lock', async () => {
+    const f = fixture((_url, _init, count) => count === 1 ? Response.json({ message: 'You have exceeded a secondary rate limit.' }, {
+      status: 403, headers: { 'retry-after': '60', 'x-ratelimit-remaining': '59',
+        'x-ratelimit-reset': String((START + 40 * MINUTE) / 1000) },
+    }) : Response.json(directory))
+    await rejectsRate(f.catalog.json(CORE), START + MINUTE)
+    assert.equal(f.catalog.getRateLimitState().searchUntil, START + MINUTE)
+    f.advance(MINUTE)
+    await f.catalog.list()
+    assert.equal(f.calls.length, 2)
+    f.catalog.dispose()
+  })
+
+  it('keeps exhausted primary metadata quota separate from a simultaneous secondary cooldown', async () => {
+    const f = fixture((_url, _init, count) => count === 1 ? Response.json({ message: 'You have exceeded a secondary rate limit.' }, {
+      status: 403, headers: { 'retry-after': '60', 'x-ratelimit-remaining': '0',
+        'x-ratelimit-reset': String((START + 40 * MINUTE) / 1000) },
+    }) : Response.json(directory))
+    await rejectsRate(f.catalog.json(CORE), START + 40 * MINUTE)
+    assert.equal(f.catalog.getRateLimitState().searchUntil, START + MINUTE)
+    f.advance(MINUTE)
+    await f.catalog.list()
+    await rejectsRate(f.catalog.json(CORE), START + 40 * MINUTE)
+    assert.equal(f.calls.length, 2)
+    f.catalog.dispose()
   })
 
   it('treats secondary-limit evidence as a GitHub-wide cooldown even with exhausted primary quota', async () => {

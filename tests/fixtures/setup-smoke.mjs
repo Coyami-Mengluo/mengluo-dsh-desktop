@@ -15,7 +15,8 @@ const { createFirstRunSetup } = await load('first-run-setup.mjs')
 const { createDesktopWindow } = await load('desktop-window.mjs')
 const { createUpdateProgressWindow } = await load('update-progress-window.mjs')
 const { createDesktopTray } = await load('desktop-tray.mjs')
-const { fallbackTitlebarSnapshot, TITLEBAR_IPC } = await load('titlebar-sampler.mjs')
+const { fallbackTitlebarSnapshot, captureTitlebarSnapshot, TITLEBAR_IPC } = await load('titlebar-sampler.mjs')
+const { createLanguageController } = await load('language.mjs')
 const trace = []
 let desktop, setup, updateProgress, tray
 const deadline = setTimeout(() => { process.stderr.write('native setup smoke timed out\n'); app.exit(1) }, 35_000)
@@ -24,13 +25,14 @@ app.on('will-quit', () => { clearTimeout(deadline) })
 async function run() {
   await app.whenReady()
   nativeTheme.themeSource = 'dark'
+  const language = createLanguageController({ userData: profile, ipcMain, getSystemLocale: () => 'zh-CN' })
   desktop = createDesktopWindow({
-    BrowserWindow, Menu, WebContentsView, ipcMain, nativeTheme,
+    BrowserWindow, Menu, WebContentsView, ipcMain, nativeTheme, language,
     productName: 'DeepSeek harness 安装自测', iconPath,
     titlebarPreloadPath: join(application, 'src', 'titlebar-preload.cjs'),
     titlebarHtmlPath: join(application, 'assets', 'titlebar.html'),
     titlebarChannels: TITLEBAR_IPC,
-    fallbackSnapshot: fallbackTitlebarSnapshot, captureSnapshot: async () => fallbackTitlebarSnapshot(true),
+    fallbackSnapshot: fallbackTitlebarSnapshot, captureSnapshot: captureTitlebarSnapshot,
     getBackendOrigin: () => undefined, openExternal: () => {},
   })
   let attempts = 0, starts = 0, fetches = 0, source = 'official', sourceChanges = 0, connectionTests = 0, downloadActivity = ''
@@ -73,6 +75,7 @@ async function run() {
   })
   await desktop.loadShell()
   desktop.window.show()
+  desktop.window.webContents.setBackgroundThrottling(false)
   tray = createDesktopTray({
     Tray, Menu, window: desktop.window, iconPath, productName: 'DeepSeek harness 安装自测',
     isQuitting: () => false, focusOfficial: () => {}, requestQuit: () => {},
@@ -124,6 +127,16 @@ async function run() {
   await expectDom("document.getElementById('setup-version').options.length === 2")
   assert.equal(attempts, 0)
   trace.push('catalog:waits-for-choice')
+  await evaluate("document.getElementById('setup-version').value = '0.9.0'; document.getElementById('setup-language').value = 'en'; document.getElementById('setup-language').dispatchEvent(new Event('change'))")
+  await expectDom("document.documentElement.lang === 'en' && document.getElementById('setup-install').textContent === 'Install & start'")
+  assert.equal(await evaluate("document.getElementById('setup-version').value"), '0.9.0')
+  assert.equal(await evaluate("document.getElementById('setup-source').value"), 'npmmirror')
+  assert.equal(fetches, 2, 'Language changes do not fetch versions')
+  await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+  await new Promise(resolve => setTimeout(resolve, 150))
+  writeFileSync(join(dirname(screenshot), 'setup-smoke-en.png'), (await desktop.window.webContents.capturePage()).toPNG())
+  await evaluate("window.desktopLanguage.setPreference('zh-CN')")
+  await expectDom("document.documentElement.lang === 'zh-CN' && document.getElementById('setup-install').textContent === '安装并启动'")
   await expectDom("!document.getElementById('setup-panel').hidden && getComputedStyle(document.getElementById('setup-panel')).display === 'grid'")
   await expectDom("document.images.length === 2 && [...document.images].every(image => image.complete && image.naturalWidth > 0)")
   await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
@@ -140,9 +153,26 @@ async function run() {
   await desktop.officialWebContents.loadURL('about:blank')
   assert.equal(await desktop.officialWebContents.executeJavaScript('typeof window.harnessSetup'), 'undefined')
   assert.equal(await desktop.officialWebContents.executeJavaScript('typeof window.harnessWindowControls'), 'undefined')
+  assert.equal(await desktop.officialWebContents.executeJavaScript('typeof window.desktopLanguage'), 'undefined')
+  // This is a synthetic page, not a real Harness profile or user conversation.
+  const themePage = '<!doctype html><style>html,body{margin:0;min-height:100vh;background:#334455}button{margin:100px}</style><button id="theme">Theme</button><script>document.getElementById("theme").onclick=()=>{document.body.style.background="linear-gradient(90deg,#225588,#448866)"}</script>'
+  await desktop.loadOfficial(`data:text/html;base64,${Buffer.from(themePage).toString('base64')}`)
+  const visibleBackground = "getComputedStyle(document.documentElement).getPropertyValue('--titlebar-background-' + (document.documentElement.dataset.backgroundLayer || 'a'))"
+  await expectDom(`${visibleBackground}.includes('#334455')`)
+  const started = Date.now()
+  for (const type of ['mouseDown', 'mouseUp']) desktop.officialWebContents.sendInputEvent({ type, x: 120, y: 110, button: 'left', clickCount: 1 })
+  await expectDom(`${visibleBackground}.includes('linear-gradient')`)
+  const clickResponseMs = Date.now() - started
+  assert.ok(clickResponseMs < 2000, `Native theme-click response took ${clickResponseMs}ms`)
+  const changed = Date.now()
+  await desktop.officialWebContents.executeJavaScript("document.body.style.background = '#662244'")
+  await expectDom(`${visibleBackground}.includes('#662244')`)
+  const pollingResponseMs = Date.now() - changed
+  assert.ok(pollingResponseMs < 2000, `Polling theme response took ${pollingResponseMs}ms`)
+  writeFileSync(join(dirname(screenshot), 'titlebar-response.json'), JSON.stringify({ clickResponseMs, pollingResponseMs, syntheticPage: true }))
   trace.push('official:no-install-bridge')
   updateProgress = createUpdateProgressWindow({
-    BrowserWindow, ipcMain, nativeTheme, getParent: () => desktop.window,
+    BrowserWindow, ipcMain, nativeTheme, language, getParent: () => desktop.window,
     preloadPath: join(application, 'src', 'update-progress-preload.cjs'),
     htmlPath: join(progressAssets, 'update-progress.html'),
   })
@@ -150,6 +180,12 @@ async function run() {
   const updateWindow = BrowserWindow.getAllWindows().find(window => window !== desktop.window)
   const updateContents = updateWindow.webContents
   await expectDom("document.getElementById('progress')?.dataset.mode === 'indeterminate'", updateContents)
+  await evaluate("window.desktopLanguage.setPreference('en')")
+  await expectDom("document.documentElement.lang === 'en' && !/\\p{Script=Han}/u.test(document.getElementById('stage-label').textContent)", updateContents)
+  assert.doesNotMatch(await updateContents.executeJavaScript("document.getElementById('progress').getAttribute('aria-valuetext')"), /\p{Script=Han}/u)
+  assert.equal(await updateContents.executeJavaScript('typeof window.desktopLanguage.setPreference'), 'undefined')
+  await evaluate("window.desktopLanguage.setPreference('zh-CN')")
+  await expectDom("document.documentElement.lang === 'zh-CN'", updateContents)
   const activity = () => updateProgress.stage('installing', '0.9.0', { completedFiles: 2, registryRequests: 98 })
   await assertProgressMotion(updateContents, '#progress', activity)
   trace.push('update:continuous-and-reduced-motion')
@@ -165,6 +201,7 @@ async function run() {
   updateProgress.dispose()
   tray.dispose()
   setup.dispose()
+  language.dispose()
   desktop.dispose()
   desktop.window.destroy()
   process.stdout.write(`setup-smoke:${JSON.stringify(trace)}\n`)

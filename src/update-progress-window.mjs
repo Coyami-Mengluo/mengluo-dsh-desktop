@@ -120,6 +120,7 @@ export function createUpdateProgressWindow(options) {
       },
     })
     window = candidate
+    options.language?.register(candidate, htmlPath)
     windowReady = false
     candidate.setMenu(null)
     candidate.webContents.on('will-navigate', event => { event.preventDefault() })

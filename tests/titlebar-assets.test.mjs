@@ -20,7 +20,7 @@ describe('isolated shell titlebar resources', () => {
     assert.match(html, /frame-ancestors 'none'/u)
     assert.match(html, /require-trusted-types-for 'script'/u)
     assert.match(html, /<link rel="stylesheet" href="\.\/titlebar\.css">/u)
-    assert.match(html, /<script src="\.\/titlebar\.js"><\/script>/u)
+    assert.match(html, /<script src="\.\/titlebar\.js" type="module"><\/script>/u)
     assert.match(html, /<img src="\.\/icon\.png"/u)
     assert.match(html, /id="titlebar-background-a"/u)
     assert.match(html, /id="titlebar-background-b"/u)
@@ -67,7 +67,8 @@ describe('isolated shell titlebar resources', () => {
     }]))
     const root = { dataset: {} }
     let receiveState
-    vm.runInNewContext(script, {
+    vm.runInNewContext(script.replace(/^import .* from '\.\/i18n\.js'\r?\n/u, ''), {
+      tr: text => text, onLanguageChange() {},
       document: { documentElement: root, getElementById: id => buttons.get(id) },
       window: {
         harnessTitlebar: { onState: () => () => {} },
@@ -96,11 +97,13 @@ describe('isolated shell titlebar resources', () => {
     let exposed
     let setup
     let controls
+    let language
     const contextBridge = {
       exposeInMainWorld: (name, value) => {
         if (name === 'harnessTitlebar') exposed = { name, value }
         else if (name === 'harnessSetup') setup = value
         else if (name === 'harnessWindowControls') controls = value
+        else if (name === 'desktopLanguage') language = value
         else throw new Error(`unexpected preload API: ${name}`)
       },
     }
@@ -114,6 +117,8 @@ describe('isolated shell titlebar resources', () => {
     assert.equal(exposed.name, 'harnessTitlebar')
     assert.deepEqual([...Object.keys(exposed.value)], ['onState'])
     assert.equal(Object.isFrozen(exposed.value), true)
+    assert.deepEqual(Object.keys(language), ['getState', 'setPreference', 'onState'])
+    assert.equal(Object.isFrozen(language), true)
     assert.throws(() => exposed.value.onState('not a function'), /listener must be a function/u)
     const received = []
     const unsubscribe = exposed.value.onState(state => { received.push(state) })

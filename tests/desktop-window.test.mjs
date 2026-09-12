@@ -7,6 +7,7 @@ import {
   isHarnessMenuShortcut,
   officialViewBounds,
   TITLEBAR_HEIGHT,
+  TITLEBAR_CAPTURE_INTERVAL_MS,
 } from '../src/desktop-window.mjs'
 
 const CHANNELS = {
@@ -31,6 +32,43 @@ const CAPTURED = Object.freeze({
 })
 
 describe('desktop shell and official WebContentsView composition', () => {
+  it('samples active theme changes within 600ms and stops work while hidden, minimized or fullscreen', async context => {
+    context.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 2000 })
+    const world = fixture()
+    const { controller } = world
+    try {
+      assert.equal(TITLEBAR_CAPTURE_INTERVAL_MS, 600)
+      await controller.loadShell()
+      await controller.loadOfficial('http://127.0.0.1:47821/')
+      await controller.refreshSnapshot()
+      context.mock.timers.tick(600)
+      await Promise.resolve()
+      assert.ok(world.captureCalls.length >= 2)
+      controller.window.visible = false
+      const hiddenCount = world.captureCalls.length
+      controller.officialWebContents.emit('before-mouse-event', {}, { type: 'mouseUp' })
+      context.mock.timers.tick(3000)
+      await Promise.resolve()
+      assert.equal(world.captureCalls.length, hiddenCount)
+      controller.window.visible = true
+      controller.window.minimized = true
+      await controller.refreshSnapshot()
+      assert.equal(world.captureCalls.length, hiddenCount)
+      controller.window.minimized = false
+      controller.window.fullscreen = true
+      await controller.refreshSnapshot()
+      assert.equal(world.captureCalls.length, hiddenCount)
+      controller.window.fullscreen = false
+      let prevented = false
+      controller.officialWebContents.emit('before-mouse-event', { preventDefault: () => { prevented = true } }, { type: 'mouseUp' })
+      context.mock.timers.tick(80)
+      await Promise.resolve()
+      assert.equal(world.captureCalls.length, hiddenCount + 1)
+      assert.equal(prevented, false)
+    } finally { controller.dispose() }
+    assert.equal(controller.officialWebContents.listenerCount('before-mouse-event'), 0)
+  })
+
   it('uses local window controls while isolating the official no-preload renderer', async () => {
     const world = fixture()
     const controller = world.controller

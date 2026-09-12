@@ -1,3 +1,4 @@
+import { tr, onLanguageChange } from './i18n.js'
 const HEX_COLOR = /^#[0-9A-F]{6}$/u
 const root = document.documentElement
 const MAX_GRADIENT_STOPS = 64
@@ -16,14 +17,15 @@ const unsubscribe = window.harnessTitlebar.onState(value => {
 })
 
 const maximizeButton = document.getElementById('window-maximize')
+const renderMaximizeLabel = () => maximizeButton.setAttribute('aria-label', root.dataset.maximized === 'true' ? tr('还原') : tr('最大化'))
+onLanguageChange(renderMaximizeLabel)
 document.getElementById('window-minimize').addEventListener('click', () => { window.harnessWindowControls.minimize() })
 maximizeButton.addEventListener('click', () => { window.harnessWindowControls.toggleMaximize() })
 document.getElementById('window-close').addEventListener('click', () => { window.harnessWindowControls.close() })
 const unsubscribeControls = window.harnessWindowControls.onState(value => {
   if (!hasExactKeys(value, ['maximized']) || typeof value.maximized !== 'boolean') return
   root.dataset.maximized = String(value.maximized)
-  const label = value.maximized ? '还原' : '最大化'
-  maximizeButton.setAttribute('aria-label', label)
+  renderMaximizeLabel()
 })
 
 window.addEventListener('beforeunload', () => { unsubscribe(); unsubscribeControls() }, { once: true })

@@ -61,6 +61,8 @@ for (const path of [
   'app.asar.unpacked/src/plugin-snapshots.mjs',
   'app.asar.unpacked/assets/settings.html', 'app.asar.unpacked/assets/settings.css',
   'app.asar.unpacked/assets/settings.js',
+  'app.asar.unpacked/src/language.mjs', 'app.asar.unpacked/assets/i18n.js',
+  'app.asar.unpacked/assets/i18n-catalog.js',
 ]) {
   if (!existsSync(join(resources, path))) throw new Error(`Missing packaged resource: ${path}`)
 }

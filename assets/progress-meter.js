@@ -1,3 +1,4 @@
+import { tr, languageState } from './i18n.js'
 /**
  * Render measured progress without coupling continuous motion to IPC cadence.
  * @param {HTMLElement} element local meter with a progress-fill child and progressbar semantics.
@@ -7,16 +8,18 @@ export function createProgressMeter(element) {
   const fill = element.querySelector('.progress-fill')
   let previousMode
   let previousPercent
+  let previousLocale
   return (percent, { hidden = false, failed = false } = {}) => {
     const measured = Number.isFinite(percent) && percent >= 0 && percent <= 100
     const mode = failed ? 'failed' : measured ? 'determinate' : 'indeterminate'
     if (element.hidden !== hidden) element.hidden = hidden
-    if (mode !== previousMode) {
+    const locale = languageState().locale
+    if (mode !== previousMode || locale !== previousLocale) {
       element.dataset.mode = mode
       if (mode === 'determinate') element.removeAttribute('aria-valuetext')
       else {
         element.removeAttribute('aria-valuenow')
-        element.setAttribute('aria-valuetext', failed ? '失败' : '进行中，尚无可用总量')
+        element.setAttribute('aria-valuetext', failed ? tr('失败') : tr('进行中，尚无可用总量'))
       }
     }
     const target = failed ? 100 : measured ? percent : 0
@@ -26,5 +29,6 @@ export function createProgressMeter(element) {
     }
     previousMode = mode
     previousPercent = target
+    previousLocale = locale
   }
 }

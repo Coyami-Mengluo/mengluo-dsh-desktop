@@ -2,7 +2,8 @@ import { spawn } from 'node:child_process'
 import { createWriteStream, existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, Notification, shell, Tray, WebContentsView } from 'electron'
+import { app, BrowserWindow, dialog as nativeDialog, ipcMain, Menu as nativeMenu, nativeTheme, net, Notification as NativeNotification, shell, Tray, WebContentsView } from 'electron'
+import { createLanguageController, localizeMenu, localizeMessageOptions } from './language.mjs'
 import {
   BACKEND_TREE_KILL_DELAY_MS,
   createHarnessLaunchEnvironment,
@@ -79,6 +80,21 @@ let pluginManager
 let pluginQuitNotice
 let pluginRecoveryExitApproved = false
 let pluginBackendPaused = false
+let language
+const translate = text => language?.translate(text) ?? text
+const Menu = Object.assign(Object.create(nativeMenu), {
+  buildFromTemplate: template => nativeMenu.buildFromTemplate(localizeMenu(template, translate)),
+})
+const dialog = Object.assign(Object.create(nativeDialog), {
+  showMessageBox(...args) {
+    const options = localizeMessageOptions(args.pop(), translate)
+    if (!options.buttons) options.buttons = [translate('确定')]
+    return nativeDialog.showMessageBox(...args, options)
+  },
+  showErrorBox: (title, content) => nativeDialog.showErrorBox(translate(title), translate(content)),
+})
+function Notification(options) { return new NativeNotification(localizeMessageOptions(options, translate)) }
+Notification.isSupported = () => NativeNotification.isSupported()
 
 preserveLegacyUserData()
 app.setName(PRODUCT_NAME)
@@ -100,6 +116,11 @@ if (!singleInstance) {
 async function startApplication() {
   await app.whenReady()
   openLog()
+  language = createLanguageController({
+    userData: app.getPath('userData'), ipcMain, getSystemLocale: () => app.getSystemLocale(),
+    onChanged: () => { updateManager?.rebuildMenu() },
+    log: text => { appendLog('settings', text) },
+  })
   const nodePathOptions = {
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
@@ -131,6 +152,7 @@ async function startApplication() {
     onError: error => { appendLog('desktop', `shell theme sync failed: ${String(error)}\n`) },
   })
   desktopWindow = createDesktopWindow({
+    language,
     BrowserWindow,
     Menu,
     WebContentsView,
@@ -168,6 +190,7 @@ async function startApplication() {
     log: text => { appendLog('tray', text) },
   })
   updateProgressWindow = createUpdateProgressWindow({
+    language,
     BrowserWindow,
     ipcMain,
     nativeTheme,
@@ -216,6 +239,7 @@ async function startApplication() {
     },
   })
   const shellProgress = createShellUpdateWindow({
+    language,
     BrowserWindow, ipcMain, nativeTheme, getParent: () => mainWindow,
     iconPath: join(APP_ROOT, 'assets', 'icon.png'),
     htmlPath: join(APP_ROOT, 'assets', 'shell-update.html'),
@@ -287,6 +311,7 @@ async function startApplication() {
     log: text => { appendLog('settings', text) },
   })
   settingsWindow = createSettingsWindow({
+    language,
     BrowserWindow, ipcMain, nativeTheme, getParent: () => mainWindow,
     productName: PRODUCT_NAME, iconPath: join(APP_ROOT, 'assets', 'icon.png'),
     htmlPath: join(APP_ROOT, 'assets', 'settings.html'),
@@ -785,6 +810,7 @@ app.on('before-quit', (event) => {
   pluginManager?.dispose()
   settingsController?.dispose()
   settingsWindow?.dispose()
+  language?.dispose()
   settingsController = undefined
   settingsWindow = undefined
   shellUpdateManager?.dispose()

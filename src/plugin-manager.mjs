@@ -70,9 +70,9 @@ export class PluginManager {
       checkUntil: this.checkUntil > this.now() ? this.checkUntil : 0 }
   }
 
-  limited(retryAt) {
+  limited(retryAt, rateLimitScope) {
     this.changed()
-    return { ok: false, rateLimited: true, retryAt, message: '请求暂时冷却中，请等待倒计时结束后重试。' }
+    return { ok: false, rateLimited: true, retryAt, rateLimitScope, message: '请求暂时冷却中，请等待倒计时结束后重试。' }
   }
 
   getState() {
@@ -261,9 +261,10 @@ export class PluginManager {
   async refresh({ catalog = true, checkFresh = false } = {}) {
     if (this.disposed || this.busy) return Promise.resolve({ ok: false })
     const limits = this.getRateLimits()
-    const retryAt = Math.max(catalog ? Math.max(this.refreshUntil, limits.searchUntil || 0) : 0,
-      checkFresh ? Math.max(this.checkUntil, limits.metadataUntil || 0) : 0)
-    if (retryAt > this.now()) return this.limited(retryAt)
+    const scopes = [...(catalog ? [['search', limits.searchUntil], ['refresh', this.refreshUntil]] : []),
+      ...(checkFresh ? [['metadata', limits.metadataUntil], ['check', this.checkUntil]] : [])]
+    const blocked = scopes.filter(([, until]) => until > this.now()).sort((a, b) => b[1] - a[1])[0]
+    if (blocked) return this.limited(blocked[1], blocked[0])
     // Reserve before awaiting either lane; IPC callers cannot bypass the UI cooldown.
     if (catalog) this.refreshUntil = this.now() + MANUAL_REFRESH_COOLDOWN_MS
     if (checkFresh) this.checkUntil = this.now() + MANUAL_REFRESH_COOLDOWN_MS
@@ -271,7 +272,9 @@ export class PluginManager {
       this.refreshInstalled({ checkFresh }),
       ...(catalog ? [this.searchCatalog(this.query, { refresh: true })] : []),
     ])
-    return results.find(result => result.rateLimited) ?? { ok: results.every(result => result.ok) }
+    // A catalog refresh must not inherit an unrelated metadata cooldown. That
+    // lane publishes its own status for the installed-plugins update button.
+    return catalog ? results[1] : results[0]
   }
 
   refreshInstalled({ checkFresh = false } = {}) {
@@ -343,7 +346,7 @@ export class PluginManager {
         if (!current()) return { ok: true, superseded: true }
         if (isRateLimit(error, this.now())) {
           this.catalogError = '搜索请求已暂停，已有结果已保留。请等待倒计时结束后重试。'
-          return this.limited(error.retryAt)
+          return this.limited(error.retryAt, 'search')
         }
         this.catalogError = append
           ? '下一页暂时无法获取，已有结果已保留。请稍后点击“加载更多”重试，或检查系统代理。'
@@ -380,7 +383,7 @@ export class PluginManager {
             try { result = await this.catalog.checkUpdate(this.tracked(item), { refresh }) }
             catch (error) {
               if (isRateLimit(error, this.now())) {
-                rateLimited = this.limited(Math.max(rateLimited?.retryAt || 0, error.retryAt))
+                rateLimited = this.limited(Math.max(rateLimited?.retryAt || 0, error.retryAt), 'metadata')
                 // Preserve any previously checked result; do not pretend a cooldown
                 // means a plugin is current, or erase useful manual-update actions.
                 if (!this.updates.has(item.id)) {
@@ -504,7 +507,7 @@ export class PluginManager {
       if (!attempted && isRateLimit(error, this.now())) {
         this.error = '插件来源检查暂时冷却中，未修改插件。请等待倒计时结束后重试。'
         this.progress = null
-        return this.limited(error.retryAt)
+        return this.limited(error.retryAt, 'metadata')
       }
       if (error.cleanupUncertain === true) this.recoveryRequired = true
       if (error.recoveryRequired === true) this.snapshotRecoveryRequired = true

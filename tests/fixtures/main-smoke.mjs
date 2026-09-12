@@ -20,6 +20,7 @@ app.getVersion = () => JSON.parse(readFileSync(join(application, 'package.json')
 const profile = join(temporary, 'appData', 'MengLuo DSH Desktop')
 mkdirSync(profile)
 writeFileSync(join(profile, 'client-updates.json'), JSON.stringify({ autoCheck: false }))
+writeFileSync(join(profile, 'language-settings.json'), JSON.stringify({ language: 'zh-CN' }))
 const menus = []
 const buildMenu = Menu.buildFromTemplate
 Menu.buildFromTemplate = function (template) { menus.push(template); return buildMenu.call(this, template) }
@@ -130,6 +131,15 @@ async function run() {
   await waitFor(() => settings.webContents.executeJavaScript("document.getElementById('harness-interval').value === '7d' && document.getElementById('harness-channel').value === 'next'"))
   assert.deepEqual(await settings.webContents.executeJavaScript("window.clientSettings.action({ type: 'test-connection' })"), { ok: true })
   await waitFor(() => settings.webContents.executeJavaScript("document.getElementById('probe-detail').textContent.includes('连接正常')"))
+  const beforeLanguage = requests.length
+  assert.equal((await settings.webContents.executeJavaScript("window.desktopLanguage.setPreference('en')")).ok, true)
+  await waitFor(() => window.webContents.executeJavaScript("document.documentElement.lang === 'en' && document.getElementById('setup-install').textContent === 'Install & start'"))
+  await waitFor(() => settings.webContents.executeJavaScript("document.documentElement.lang === 'en' && document.getElementById('harness-primary').textContent === 'Choose version & install'"))
+  assert.ok(menus.some(items => items.some(item => item.label === 'Client settings…')), 'Native menus switch with the shell language')
+  assert.equal(requests.length, beforeLanguage)
+  assert.equal(JSON.parse(readFileSync(join(profile, 'language-settings.json'))).language, 'en')
+  await window.webContents.executeJavaScript("window.desktopLanguage.setPreference('zh-CN')")
+  await waitFor(() => settings.webContents.executeJavaScript("document.documentElement.lang === 'zh-CN'"))
   const beforePlugins = requests.length
   await settings.webContents.executeJavaScript("document.getElementById('tab-plugins').click()")
   await waitFor(() => settings.webContents.executeJavaScript("document.getElementById('panel-plugins').hidden === false && document.getElementById('plugins-runtime-notice').hidden === false && document.getElementById('plugins-catalog-error').hidden === false && document.getElementById('plugins-refresh').disabled === true && document.getElementById('plugins-search-cooldown').hidden === false"))

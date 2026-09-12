@@ -112,7 +112,11 @@ progress::-webkit-progress-value { background: var(--accent); border-radius: 4px
 .plugin-list-status { margin: 13px 0; font-size: 11px; }
 .plugin-list { display: grid; gap: 11px; }
 .plugin-card { margin: 0; padding: 15px; }
-.plugin-card .card-heading { align-items: flex-start; }
+.plugin-card .card-heading { align-items: flex-start; flex-wrap: wrap; }
+.plugin-card .badge { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.language-preference { max-width: 760px; margin-inline: auto; }
+.language-preference select { min-width: 140px; }
+.language-preference .setting-row > div { min-width: 0; }
 .plugin-card .card-heading > div { min-width: 0; }
 .plugin-card h2 { font-size: 14px; }
 .plugin-package { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; margin-top: 3px; line-height: 1.5; }

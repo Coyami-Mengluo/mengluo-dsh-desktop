@@ -4,7 +4,7 @@ English | [中文](README.zh.md) | [Changelog](CHANGELOG.md)
 
 An unofficial, personal-maintainer Windows desktop client for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). This project is not affiliated with, sponsored by, or endorsed by DeepSeek. Harness provides the agent and its Web UI; this project provides installation, native windows, process supervision, and desktop integration.
 
-Current version: **0.5.6**. See the [changelog](CHANGELOG.md) for public release history.
+Development version: **0.5.7 (unreleased)**. The latest public installer remains **0.5.6**. See the [changelog](CHANGELOG.md) for changes and release history.
 
 ## Install and use
 
@@ -34,6 +34,8 @@ Community plugin store:
 
 ## Client settings and download sources
 
+The first-install page and client settings offer **Follow system / 简体中文 / English**. Changes apply immediately to client windows, menus and update progress and are saved in the client's `language-settings.json`. They do not restart Harness, translate its official UI or rewrite community plugin names and descriptions. Follow system uses Simplified Chinese for Chinese system locales and English otherwise.
+
 Open **Client settings** from the tray or **Ctrl+Alt+U** menu. It has five sections:
 
 - **Harness:** current version, installation and updates, update channel, automatic checking and its interval. Automatic Harness checks retain the existing behavior: a discovered update can be downloaded and verified in the background, then you are asked to restart before switching to it.
@@ -49,6 +51,8 @@ Selecting npmmirror changes only the transport for npm package files. The client
 npmmirror is a third-party service and may lag behind official releases. It is not a guaranteed speedup: official metadata must still be reachable, and dependency resolution, disk verification and startup checks still take time. The connection check reports connectivity and response time, not actual download throughput or whether a target version has synchronized. These settings do not alter the official Harness UI.
 
 ## Plugins
+
+Cooldown messages identify local protection, GitHub search quota, plugin metadata quota, or temporary service throttling. Plugin update-check limits do not lock catalog refresh. A GitHub primary reset deadline is used only when that request bucket is exhausted; temporary limits use `Retry-After` or bounded backoff, not an unrelated hourly reset.
 
 **Client settings → Plugins** has a store, an installed-plugin view and local snapshots. The store searches public, non-archived, non-fork repositories carrying GitHub's [`dsh-plugin` topic](https://github.com/topics/dsh-plugin), ordered by recent updates. Keywords are sent to GitHub's repository search across names, descriptions and READMEs, rather than filtering only the currently loaded list. Results load in pages of up to 100; use **Load more** for subsequent pages. GitHub exposes at most 1,000 results per search and may return incomplete results, so narrow the keywords when prompted. Repositories without this topic are outside the store's search scope.
 

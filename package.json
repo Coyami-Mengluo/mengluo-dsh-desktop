@@ -1,6 +1,6 @@
 {
   "name": "mengluo-dsh-desktop",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "description": "An unofficial Windows desktop client for DeepSeek Harness",
   "license": "MIT",
   "author": "MengLuo DSH Desktop contributors",
@@ -45,6 +45,7 @@
       "assets/titlebar.*",
       "assets/setup.*",
       "assets/settings.*",
+      "assets/i18n*.js",
       "assets/progress-meter.*",
       "assets/shell-update.*",
       "assets/icon.png",

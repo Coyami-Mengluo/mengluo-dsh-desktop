@@ -4,6 +4,16 @@ This log records client features, improvements, fixes and public releases. Inter
 
 本日志记录客户端新增功能、改进、修复和公开版本。0.5.3、0.5.4 为内部版本，不列为公开发布。
 
+## 0.5.7 — Unreleased / 未发布
+
+- Added live client-language switching: follow system, Simplified Chinese, or English. Official Harness UI and community plugin content remain unchanged.
+- Improved titlebar theme-color response while retaining smooth gradient transitions.
+- Fixed plugin metadata cooldowns incorrectly locking catalog refresh and GitHub secondary limits incorrectly inheriting an unrelated hourly reset. Cooldown messages now identify their source.
+
+- 新增客户端界面语言切换：跟随系统、简体中文、English，即时生效，不改变官方 Harness 界面和社区插件内容。
+- 提高顶栏主题颜色响应速度，保留渐变匹配与平滑过渡。
+- 修复插件信息检查冷却误锁目录刷新，以及 GitHub 临时限流错误沿用小时额度重置时间的问题；冷却提示明确标示限制来源。
+
 ## 0.5.6
 
 - Unified plugin-search request protection in the main process: search, pagination and refresh share 8 dispatches per rolling 60 seconds, with at least a 1-second gap. Manual refresh and plugin update checks each have a 30-second cooldown. The settings page displays countdowns and retains cached or previous results for manual retry.

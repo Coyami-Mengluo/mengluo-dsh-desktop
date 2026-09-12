@@ -3,7 +3,10 @@ import { createTitlebarState } from './titlebar-sampler.mjs'
 import { createWindowControls } from './window-controls.mjs'
 
 export const TITLEBAR_HEIGHT = 44
-export const TITLEBAR_CAPTURE_INTERVAL_MS = 2_500
+export const TITLEBAR_CAPTURE_INTERVAL_MS = 600
+export const TITLEBAR_BACKGROUND_CAPTURE_INTERVAL_MS = 2_500
+const TITLEBAR_INPUT_CAPTURE_DELAY_MS = 80
+const TITLEBAR_CAPTURE_MIN_GAP_MS = 200
 // The parent clips this extra DIP after Chromium converts child bounds at fractional display scales.
 const BOTTOM_CLIP_OVERSCAN = 1
 
@@ -126,6 +129,7 @@ export function createDesktopWindow(options) {
       allowRunningInsecureContent: false,
     },
   })
+  options.language?.register(window, options.titlebarHtmlPath, true)
   const officialWebContents = officialView.webContents
   window.contentView.addChildView(officialView)
   officialView.setVisible(false)
@@ -136,6 +140,7 @@ export function createDesktopWindow(options) {
   let captureTimer
   let captureInFlight = false
   let captureQueued = false
+  let lastCaptureAt = -Infinity
   let snapshot = options.fallbackSnapshot(options.nativeTheme.shouldUseDarkColors)
   const removals = []
   const windowControls = createWindowControls({ window, ipcMain: options.ipcMain, htmlPath: options.titlebarHtmlPath })
@@ -175,16 +180,18 @@ export function createDesktopWindow(options) {
     captureTimer = setTimeout(() => {
       captureTimer = undefined
       void refreshSnapshot()
-    }, delay)
+    }, Math.max(delay, TITLEBAR_CAPTURE_MIN_GAP_MS - (Date.now() - lastCaptureAt)))
     captureTimer.unref?.()
   }
   const refreshSnapshot = async () => {
-    if (disposed || !officialLoaded || officialWebContents.isDestroyed()) return
+    if (disposed || !officialLoaded || officialWebContents.isDestroyed() || window.isDestroyed()
+      || !window.isVisible() || window.isMinimized() || window.isFullScreen()) return
     if (captureInFlight) {
       captureQueued = true
       return
     }
     captureInFlight = true
+    lastCaptureAt = Date.now()
     const revision = loadRevision
     try {
       const bounds = officialView.getBounds()
@@ -280,6 +287,14 @@ export function createDesktopWindow(options) {
     }
   })
   listen(officialWebContents, 'did-finish-load', () => { scheduleCapture(0) })
+  // Observe native input completion without intercepting it or injecting into
+  // Harness. Capture only its existing 8px top strip, never mouse-move events.
+  listen(officialWebContents, 'before-mouse-event', (_event, input) => {
+    if (input?.type === 'mouseUp') scheduleCapture(TITLEBAR_INPUT_CAPTURE_DELAY_MS)
+  })
+  listen(officialWebContents, 'before-input-event', (_event, input) => {
+    if (input?.type === 'keyUp') scheduleCapture(TITLEBAR_INPUT_CAPTURE_DELAY_MS)
+  })
 
   const onTitlebarReady = (event) => {
     if (event.sender === window.webContents) sendState()
@@ -287,7 +302,8 @@ export function createDesktopWindow(options) {
   options.ipcMain.on(options.titlebarChannels.ready, onTitlebarReady)
 
   const captureInterval = setInterval(() => {
-    if (disposed || !officialLoaded || window.isDestroyed() || window.isMinimized() || !window.isVisible()) return
+    if (disposed || !officialLoaded || window.isDestroyed() || window.isMinimized() || !window.isVisible() || window.isFullScreen()) return
+    if (!window.isFocused() && Date.now() - lastCaptureAt < TITLEBAR_BACKGROUND_CAPTURE_INTERVAL_MS) return
     scheduleCapture(0)
   }, TITLEBAR_CAPTURE_INTERVAL_MS)
   captureInterval.unref?.()

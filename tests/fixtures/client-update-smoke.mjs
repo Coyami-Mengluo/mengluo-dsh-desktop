@@ -12,6 +12,7 @@ app.setPath('sessionData', profile)
 const load = name => import(pathToFileURL(join(application, 'src', name)).href)
 const { createNativeShellUpdater } = await load('native-shell-updater.mjs')
 const { createShellUpdateWindow, CLIENT_UPDATE_CHANNELS } = await load('shell-update-window.mjs')
+const { createLanguageController } = await load('language.mjs')
 let controller
 const deadline = setTimeout(() => { process.stderr.write('client smoke timed out\n'); app.exit(1) }, 30_000)
 app.on('will-quit', () => clearTimeout(deadline))
@@ -19,6 +20,8 @@ app.on('window-all-closed', () => {})
 
 async function run() {
   await app.whenReady()
+  let systemLocale = 'zh-CN'
+  const language = createLanguageController({ userData: profile, ipcMain, getSystemLocale: () => systemLocale })
   const { updater, createCancellationToken } = createNativeShellUpdater(dependencies)
   assert.equal(updater.constructor.name, 'NsisUpdater')
   assert.equal(createCancellationToken().cancelled, false)
@@ -30,7 +33,7 @@ async function run() {
   const errors = []
   const htmlPath = join(application, 'assets', 'shell-update.html')
   controller = createShellUpdateWindow({
-    BrowserWindow, ipcMain, nativeTheme, htmlPath,
+    BrowserWindow, ipcMain, nativeTheme, htmlPath, language,
     preloadPath: join(application, 'src', 'shell-update-preload.cjs'),
     iconPath: join(application, 'assets', 'icon.png'), getParent: () => undefined,
     onAction: action => actions.push(action), log: message => errors.push(message),
@@ -61,6 +64,17 @@ async function run() {
   nativeTheme.themeSource = 'dark'
   await expectDom(contents, "document.documentElement.dataset.dark === 'true'")
   writeFileSync(join(screenshots, 'client-update-dark.png'), (await contents.capturePage()).toPNG())
+  systemLocale = 'en-US'
+  window.emit('focus')
+  await expectDom(contents, "document.documentElement.lang === 'en' && document.getElementById('status').textContent === 'Downloading client update'")
+  assert.match(await contents.executeJavaScript("document.getElementById('transfer').textContent"), /3 sec/u)
+  assert.equal(await contents.executeJavaScript('typeof window.desktopLanguage.setPreference'), 'undefined')
+  assert.equal(await contents.executeJavaScript('document.documentElement.scrollWidth <= innerWidth'), true)
+  await contents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+  writeFileSync(join(screenshots, 'client-update-en.png'), (await contents.capturePage()).toPNG())
+  systemLocale = 'zh-CN'
+  window.emit('focus')
+  await expectDom(contents, "document.documentElement.lang === 'zh-CN' && document.getElementById('status').textContent === '下载客户端更新'")
   window.close()
   assert.equal(window.isDestroyed(), false)
   assert.equal(window.isVisible(), false)
@@ -76,6 +90,7 @@ async function run() {
   await expect(() => actions.length === 2)
   assert.deepEqual(actions, ['download', 'install'])
   controller.dispose()
+  language.dispose()
   assert.equal(ipcMain.listenerCount(CLIENT_UPDATE_CHANNELS.action), 0)
   assert.equal(window.isDestroyed(), true)
   assert.deepEqual(errors, [])

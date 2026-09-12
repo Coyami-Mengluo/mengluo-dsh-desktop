@@ -49,6 +49,7 @@ export function createShellUpdateWindow(options) {
         },
       })
       window = candidate
+      options.language?.register(candidate, options.htmlPath)
       candidate.setMenu(null)
       candidate.webContents.on('will-navigate', event => { event.preventDefault() })
       candidate.webContents.on('will-attach-webview', event => { event.preventDefault() })

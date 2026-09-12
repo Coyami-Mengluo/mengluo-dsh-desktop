@@ -42,6 +42,7 @@ export function verifyArtifacts() {
     'src/plugin-manager.mjs', 'src/plugin-catalog.mjs', 'src/plugin-rate-limit.mjs', 'src/plugin-runtime.mjs',
     'src/plugin-snapshots.mjs',
     'src/settings-window.mjs', 'src/settings-controller.mjs', 'assets/settings.js',
+    'src/language.mjs', 'assets/i18n.js', 'assets/i18n-catalog.js',
     'assets/settings.html', 'assets/settings.css',
     'src/shell-update-window.mjs', 'src/shell-update-preload.cjs', 'assets/shell-update.js',
     'assets/shell-update.html', 'assets/icon.png', 'LICENSE', 'THIRD_PARTY_NOTICES.md',

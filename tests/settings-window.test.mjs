@@ -143,7 +143,7 @@ describe('isolated client settings window', () => {
     world.controller.show('plugins')
     await tick()
     assert.deepEqual(await world.invoke(world.trustedEvent(), { type: 'plugins-refresh' }), {
-      ok: false, rateLimited: true, retryAt, message: '插件请求冷却中，请等待倒计时结束后重试。',
+      ok: false, rateLimited: true, retryAt, rateLimitScope: 'refresh', message: '插件请求冷却中，请等待倒计时结束后重试。',
     })
     assert.deepEqual(world.logs, [])
     world.controller.dispose()
@@ -227,9 +227,15 @@ describe('isolated client settings window', () => {
       { type: 'plugins-search', query: '主题' }, { type: 'plugins-more', query: '' },
       { type: 'plugin-install', id: 'npm:theme' }, { type: 'plugin-update', id: 'npm:theme' }]) {
       assert.deepEqual(await world.invoke(world.trustedEvent(), request), {
-        ok: false, rateLimited: true, retryAt, message: '插件请求冷却中，请等待倒计时结束后重试。',
+        ok: false, rateLimited: true, retryAt,
+        rateLimitScope: ({ 'plugins-refresh': 'refresh', 'plugins-check': 'check', 'plugins-search': 'search', 'plugins-more': 'search' }[request.type] ?? 'metadata'),
+        message: '插件请求冷却中，请等待倒计时结束后重试。',
       })
     }
+    reply.rateLimitScope = 'metadata'
+    assert.equal((await world.invoke(world.trustedEvent(), { type: 'plugins-refresh' })).rateLimitScope, 'metadata')
+    reply.rateLimitScope = 'https://private.invalid'
+    assert.equal((await world.invoke(world.trustedEvent(), { type: 'plugins-refresh' })).rateLimitScope, 'refresh')
     assert.equal((await world.invoke(world.trustedEvent(), { type: 'client-check' })).rateLimited, undefined)
     assert.equal((await world.invoke(world.trustedEvent(), { type: 'plugin-remove', id: 'npm:theme' })).rateLimited, undefined)
     for (const invalid of [undefined, null, 0, -1, Infinity, NaN, '123', {}, 1.5, 8.64e15 + 1]) {
@@ -243,7 +249,7 @@ describe('isolated client settings window', () => {
     world.controller.update({ plugins: { rateLimits: { searchUntil: retryAt, metadataUntil: Infinity,
       refreshUntil: 'private', checkUntil: -1, searchReason: 'token=private', metadataReason: 'private' } } })
     const payload = world.windows[0].webContents.messages.at(-1)[1]
-    assert.deepEqual(payload.plugins.rateLimits, { searchUntil: retryAt, metadataUntil: 0, refreshUntil: 0, checkUntil: 0 })
+    assert.deepEqual(payload.plugins.rateLimits, { searchUntil: retryAt, metadataUntil: 0, refreshUntil: 0, checkUntil: 0, searchReason: '', metadataReason: '' })
     assert.doesNotMatch(JSON.stringify(payload), /private|token/u)
     world.controller.dispose()
   })

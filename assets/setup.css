@@ -21,7 +21,7 @@
 .setup-intro, .setup-note { color: var(--setup-muted); font-size: 14px; line-height: 1.7; }
 .setup-note { margin-top: 24px; font-size: 12px; }
 #setup-card label { display: block; margin: 20px 0 9px; font-size: 13px; font-weight: 600; }
-#setup-version, #setup-source {
+#setup-version, #setup-source, #setup-language {
   width: 100%; padding: 12px; font: inherit; font-size: 14px;
   color: inherit; background: var(--setup-field); border: 1px solid var(--setup-border); border-radius: 8px;
 }
@@ -31,8 +31,8 @@
   color: #fff; background: #4165e4; font: inherit; font-size: 14px; cursor: pointer;
 }
 .setup-actions button.secondary, #setup-source-test { color: inherit; background: var(--setup-field); border-color: var(--setup-border); }
-.setup-actions button:disabled, #setup-version:disabled, #setup-source:disabled, #setup-source-test:disabled { opacity: .5; cursor: default; }
-.setup-actions button:focus-visible, #setup-version:focus-visible, #setup-source:focus-visible, #setup-source-test:focus-visible { outline: 2px solid #4165e4; outline-offset: 3px; }
+.setup-actions button:disabled, #setup-version:disabled, #setup-source:disabled, #setup-language:disabled, #setup-source-test:disabled { opacity: .5; cursor: default; }
+.setup-actions button:focus-visible, #setup-version:focus-visible, #setup-source:focus-visible, #setup-language:focus-visible, #setup-source-test:focus-visible { outline: 2px solid #4165e4; outline-offset: 3px; }
 .setup-source-row { display: flex; gap: 10px; align-items: stretch; }
 #setup-source { min-width: 0; flex: 1; }
 #setup-source-test { flex-shrink: 0; padding-inline: 15px; }

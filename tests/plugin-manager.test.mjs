@@ -223,6 +223,28 @@ describe('plugin manager: detection is never an installation', () => {
     assert.equal(requests, 1)
   })
 
+  it('does not report a 40-minute metadata cooldown as a catalog refresh failure', async () => {
+    const world = fixture()
+    world.items.push(plugin())
+    const until = world.now + 40 * 60_000
+    world.catalog.getRateLimitState = () => ({ metadataUntil: until, searchUntil: 0 })
+    world.catalog.checkUpdate = async () => {
+      throw Object.assign(new Error('private metadata response'), { code: 'PLUGIN_RATE_LIMIT', retryAt: until })
+    }
+    assert.deepEqual(await world.manager.handleAction({ type: 'plugins-refresh' }), { ok: true })
+    assert.equal(world.manager.getState().rateLimits.refreshUntil, world.now + 30_000)
+    assert.equal(world.manager.getState().rateLimits.metadataUntil, until)
+    const refresh = await world.manager.handleAction({ type: 'plugins-refresh' })
+    assert.equal(refresh.rateLimitScope, 'refresh')
+    assert.equal(refresh.retryAt, world.now + 30_000)
+    const check = await world.manager.handleAction({ type: 'plugins-check' })
+    assert.equal(check.rateLimitScope, 'metadata')
+    assert.equal(check.retryAt, until)
+    world.now += 30_000
+    assert.equal((await world.manager.handleAction({ type: 'plugins-refresh' })).ok, true)
+    assert.equal(world.operations.length, 0)
+  })
+
   it('releases mutation locks after a source cooldown without confirmation or installation', async () => {
     const world = fixture()
     await world.manager.refresh()

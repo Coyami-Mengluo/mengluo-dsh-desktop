@@ -1,3 +1,4 @@
+import { tr, onLanguageChange } from './i18n.js'
 import { formatUpdateTiming } from './update-progress-timing.js'
 import { createProgressMeter } from './progress-meter.js'
 
@@ -16,21 +17,21 @@ function renderTiming() {
   timing.textContent = formatUpdateTiming(latestState)
 }
 
-window.harnessUpdateProgress.onState(state => {
+function render(state) {
   if (state === null || typeof state !== 'object' || !order.includes(state.stage)) return
   latestState = state
   document.documentElement.dataset.theme = state.theme === 'dark' ? 'dark' : 'light'
   document.body.classList.toggle('failed', state.status === 'failed')
-  label.textContent = typeof state.label === 'string' ? state.label : 'Harness 更新'
-  version.textContent = typeof state.version === 'string' && state.version !== '' ? `目标版本 ${state.version}` : ''
-  detail.textContent = typeof state.detail === 'string' ? state.detail : ''
+  label.textContent = typeof state.label === 'string' ? tr(state.label) : tr('Harness 更新')
+  version.textContent = typeof state.version === 'string' && state.version !== '' ? tr`目标版本 ${state.version}` : ''
+  detail.textContent = typeof state.detail === 'string' ? tr(state.detail) : ''
   renderProgress(state.percent, { failed: state.status === 'failed' })
   if (state.status === 'failed') {
-    percent.textContent = '失败'
+    percent.textContent = tr('失败')
   } else if (Number.isFinite(state.percent)) {
     percent.textContent = `${String(state.percent)}%`
   } else {
-    percent.textContent = '进行中'
+    percent.textContent = tr('进行中')
   }
   const activeIndex = order.indexOf(state.stage)
   for (const item of stages) {
@@ -41,4 +42,7 @@ window.harnessUpdateProgress.onState(state => {
   clearInterval(timingTimer)
   renderTiming()
   if (state.status === 'running') timingTimer = setInterval(renderTiming, 1_000)
-})
+}
+const unsubscribe = window.harnessUpdateProgress.onState(render)
+onLanguageChange(() => { if (latestState) render(latestState) })
+window.addEventListener('beforeunload', () => { unsubscribe(); clearInterval(timingTimer) }, { once: true })

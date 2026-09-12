@@ -1,5 +1,6 @@
 import { pathToFileURL } from 'node:url'
 import { normalizePluginSearchQuery } from './plugin-catalog.mjs'
+import { safeRateLimitReason } from './plugin-rate-limit.mjs'
 
 export const SETTINGS_IPC = Object.freeze({
   state: 'mengluo:settings:state',
@@ -78,7 +79,10 @@ const pluginRequestActions = new Set(['plugins-search', 'plugins-more', 'plugins
 const safeDeadline = value => Number.isSafeInteger(value) && value > 0 && value <= 8.64e15 ? value : 0
 const cooldownFailure = (request, result) => pluginRequestActions.has(request.type)
   && (result?.rateLimited === true || result?.code === 'PLUGIN_RATE_LIMIT') && safeDeadline(result.retryAt)
-  ? { ok: false, rateLimited: true, retryAt: result.retryAt, message: '插件请求冷却中，请等待倒计时结束后重试。' } : undefined
+  ? { ok: false, rateLimited: true, retryAt: result.retryAt,
+    rateLimitScope: ['search', 'metadata', 'refresh', 'check'].includes(result.rateLimitScope) ? result.rateLimitScope
+      : ({ 'plugins-refresh': 'refresh', 'plugins-check': 'check', 'plugins-search': 'search', 'plugins-more': 'search' }[request.type] ?? 'metadata'),
+    message: '插件请求冷却中，请等待倒计时结束后重试。' } : undefined
 const safeCatalogMessages = new Set([
   '搜索请求已暂停，已有结果已保留。请等待倒计时结束后重试。',
   '下一页暂时无法获取，已有结果已保留。请稍后点击“加载更多”重试，或检查系统代理。',
@@ -111,6 +115,8 @@ export function createSettingsWindow(options) {
         if (state.plugins.rateLimits) state.plugins.rateLimits = {
           ...Object.fromEntries(['searchUntil', 'metadataUntil', 'refreshUntil', 'checkUntil']
             .map(key => [key, safeDeadline(state.plugins.rateLimits[key])])),
+          searchReason: safeRateLimitReason(state.plugins.rateLimits.searchReason),
+          metadataReason: safeRateLimitReason(state.plugins.rateLimits.metadataReason),
         }
       }
       window.webContents.send(SETTINGS_IPC.state, {
@@ -167,6 +173,7 @@ export function createSettingsWindow(options) {
         },
       })
       window = candidate
+      options.language?.register(candidate, options.htmlPath, true)
       candidate.setMenu(null)
       candidate.webContents.on('will-navigate', event => { event.preventDefault() })
       candidate.webContents.on('will-frame-navigate', event => { event.preventDefault() })

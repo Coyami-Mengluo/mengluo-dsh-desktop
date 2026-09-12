@@ -10,6 +10,7 @@ mkdirSync(profile)
 app.setPath('userData', profile)
 app.setPath('sessionData', profile)
 const { createSettingsWindow, SETTINGS_IPC } = await import(pathToFileURL(join(application, 'src', 'settings-window.mjs')).href)
+const { createLanguageController, readLanguagePreference } = await import(pathToFileURL(join(application, 'src', 'language.mjs')).href)
 let controller
 const deadline = setTimeout(() => { process.stderr.write('settings smoke timed out\n'); app.exit(1) }, 40_000)
 app.on('will-quit', () => clearTimeout(deadline))
@@ -19,6 +20,8 @@ async function run() {
   await app.whenReady()
   nativeTheme.themeSource = 'light'
   const actions = [], logs = [], layouts = []
+  let systemLocale = 'zh-CN'
+  const language = createLanguageController({ userData: profile, ipcMain, getSystemLocale: () => systemLocale })
   const state = {
     harness: {
       installed: true, version: '0.1.2-rc.1', status: 'available', availableVersion: '0.1.3-rc.1',
@@ -43,9 +46,9 @@ async function run() {
       installed: [
         { id: 'npm:@example/workflow', name: '@example/workflow', version: '2.0.0', availableVersion: '2.1.0', updateAvailable: true, managed: true, repositoryUrl: 'https://github.com/example/workflow' },
         { id: 'npm:official-component', name: '官方自带组件', version: '0.1.5-rc.1', managed: false },
-        { id: 'github:example/local-theme', name: 'Git 来源主题', version: 'a12b456', managed: true, updateCheckStatus: 'unknown', updateCheckMessage: 'Git 来源暂时无法确定更新，请查看源码。', repositoryUrl: 'https://github.com/example/local-theme' },
+        { id: 'github:example/local-theme', name: 'Git 来源主题', version: 'a12b456', managed: true, updateCheckStatus: 'unknown', updateCheckMessage: '此来源暂不支持自动检测，请查看作者说明。', repositoryUrl: 'https://github.com/example/local-theme' },
       ],
-      progress: null, error: undefined, notice: '插件操作使用当前 Harness 的 web 配置，完成后可能需要重启。',
+      progress: null, error: undefined, notice: '社区插件未经本客户端安全审核，兼容性需以作者说明为准。进入此页会检查更新，但不会自动安装或升级插件。',
       snapshots: { loading: false, error: '', recoveryRequired: false, items: [
         { id: '671d55b3-29ed-4bd2-b241-e68c755ef000', createdAt: '2026-09-11T10:00:00.000Z', action: 'update',
           pluginName: '极光主题', status: 'success', runtimeVersion: '0.1.2-rc.1', bytes: 524288, files: 24 },
@@ -61,7 +64,7 @@ async function run() {
   let searchRevision = 0
   let failNextMore = true
   controller = createSettingsWindow({
-    BrowserWindow, ipcMain, nativeTheme, getParent: () => undefined,
+    BrowserWindow, ipcMain, nativeTheme, language, getParent: () => undefined,
     htmlPath: join(application, 'assets', 'settings.html'),
     preloadPath: join(application, 'src', 'settings-preload.cjs'),
     iconPath: join(application, 'assets', 'icon.png'), productName: 'MengLuo DSH Desktop',
@@ -114,7 +117,9 @@ async function run() {
   controller.show('harness')
   const window = BrowserWindow.getAllWindows()[0]
   const contents = window.webContents
+  contents.setBackgroundThrottling(false)
   await expectDom(contents, "document.getElementById('harness-version')?.textContent === '0.1.2-rc.1'")
+  await expectDom(contents, "!document.getElementById('client-language').disabled")
   assert.equal(await contents.executeJavaScript("typeof require + ':' + typeof process"), 'undefined:undefined')
   assert.equal(await contents.executeJavaScript("Object.keys(window.clientSettings).sort().join(',')"), 'action,onState,ready')
   await checkLayout(contents, 'harness-normal-light', layouts)
@@ -406,6 +411,37 @@ async function run() {
       }
     }
   }
+  const actionsBeforeLanguage = actions.length
+  const rawName = state.plugins.catalog[0].name
+  const rawDescription = state.plugins.catalog[0].description
+  state.plugins.catalog[0].name = '安装'
+  state.plugins.catalog[0].description = '检查更新'
+  controller.update(state)
+  await contents.executeJavaScript("document.getElementById('client-language').value = 'en'; document.getElementById('client-language').dispatchEvent(new Event('change'))")
+  await expectDom(contents, "document.documentElement.lang === 'en' && !document.getElementById('client-language').disabled && document.getElementById('harness-primary').textContent === 'Download update'")
+  assert.equal(readLanguagePreference(profile), 'en')
+  assert.equal(await contents.executeJavaScript("document.querySelector('#plugins-catalog h2').textContent"), '安装')
+  assert.equal(await contents.executeJavaScript("document.querySelector('#plugins-catalog .detail').textContent"), '检查更新')
+  for (const theme of ['light', 'dark']) {
+    nativeTheme.themeSource = theme
+    await expectDom(contents, `document.documentElement.dataset.theme === '${theme}'`)
+    for (const section of ['harness', 'plugins', 'network', 'client', 'about']) {
+      await contents.executeJavaScript(`document.getElementById('tab-${section}').click()`)
+      await pause(30)
+      await checkLayout(contents, `${section}-narrow-${theme}-en`, layouts)
+      await screenshot(contents, `${section}-narrow-${theme}-en`)
+    }
+  }
+  assert.equal(actions.length, actionsBeforeLanguage, 'Changing language never requests plugin data or mutates Harness')
+  window.close()
+  controller.show('about')
+  await expectDom(contents, "document.documentElement.lang === 'en' && document.getElementById('client-language').value === 'en'")
+  systemLocale = 'zh-CN'
+  assert.equal((await contents.executeJavaScript("window.desktopLanguage.setPreference('system')")).ok, true)
+  await expectDom(contents, "document.documentElement.lang === 'zh-CN' && document.getElementById('client-language').value === 'system'")
+  state.plugins.catalog[0].name = rawName
+  state.plugins.catalog[0].description = rawDescription
+  controller.update(state)
   await contents.executeJavaScript("document.getElementById('settings-content').scrollTop = 40")
   const scroll = await contents.executeJavaScript("document.getElementById('settings-content').scrollTop")
   assert.ok(scroll > 0, 'Narrow about panel should scroll within main')
@@ -429,6 +465,7 @@ async function run() {
   await contents.executeJavaScript("window.dispatchEvent(new Event('beforeunload'))")
   assert.equal(await contents.executeJavaScript('window.pluginCooldownIntervals.size'), 0, 'Unloading clears the live countdown timer')
   controller.dispose()
+  language.dispose()
   assert.equal(window.isDestroyed(), true)
   assert.equal(ipcMain.listenerCount(SETTINGS_IPC.ready), 0)
   assert.deepEqual(logs, [])
@@ -486,6 +523,7 @@ async function checkLayout(contents, name, layouts) {
   assert.deepEqual(layout.outside, [], `${name}: controls outside main viewport`)
 }
 async function screenshot(contents, name) {
+  await contents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
   await pause(80)
   writeFileSync(join(screenshots, `settings-smoke-${name}.png`), (await contents.capturePage()).toPNG())
 }

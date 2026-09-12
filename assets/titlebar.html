@@ -41,6 +41,8 @@
       <p class="setup-eyebrow">MENGLUO DSH DESKTOP</p>
       <h1>选择你的 Harness 版本</h1>
       <p class="setup-intro">客户端不预装 Harness。请选择下载源和官方版本，确认后才会开始安装。</p>
+      <label for="setup-language">界面语言 / Language</label>
+      <select id="setup-language"><option value="system">跟随系统</option><option value="zh-CN" data-language-name>简体中文</option><option value="en" data-language-name>English</option></select>
       <p id="setup-reason" role="alert" hidden></p>
       <label for="setup-source">Harness 下载源</label>
       <div class="setup-source-row">
@@ -66,7 +68,7 @@
       <p class="setup-note">安装完成后可直接启动，无需再安装 Node 或 npm。关闭窗口会隐藏到托盘，不会中断安装。</p>
     </div>
   </section>
-  <script src="./titlebar.js"></script>
+  <script src="./titlebar.js" type="module"></script>
   <script src="./setup.js" type="module"></script>
 </body>
 </html>
