@@ -150,6 +150,22 @@ describe('local first-run setup controller', () => {
     await assert.rejects(f.action({ type: 'download-source', source: 'official' }), /正在进行/u)
     f.setup.dispose()
   })
+  it('only forwards a catalog-confirmed target version for read-only connection testing', async () => {
+    const versions = []
+    const f = fixture({ downloadSettings: { getState: () => ({ source: 'npmmirror' }),
+      testConnection: async version => { versions.push(version); return { ok: true } },
+    } })
+    await f.setup.show()
+    await f.action({ type: 'test-connection', version: '1.0.0' })
+    assert.deepEqual(versions, ['1.0.0'])
+    await assert.rejects(f.action({ type: 'test-connection', version: '9.9.9' }), /目标版本/u)
+    await assert.rejects(f.action({ type: 'test-connection', version: '../file' }), /目标版本/u)
+    await assert.rejects(f.action({ type: 'test-connection', version: '1.0.0', url: 'https://evil.example' }), /不支持/u)
+    assert.deepEqual(versions, ['1.0.0'])
+    assert.deepEqual(f.installs, [])
+    f.setup.dispose()
+  })
+
   it('tests only the selected source and clears stale results after source changes', async () => {
     let source = 'npmmirror'
     const checking = Promise.withResolvers()

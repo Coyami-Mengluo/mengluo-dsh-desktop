@@ -63,6 +63,7 @@ async function run() {
   let limitedSearchUntil = 0
   let searchRevision = 0
   let failNextMore = true
+  let restartReady
   controller = createSettingsWindow({
     BrowserWindow, ipcMain, nativeTheme, language, getParent: () => undefined,
     htmlPath: join(application, 'assets', 'settings.html'),
@@ -70,6 +71,17 @@ async function run() {
     iconPath: join(application, 'assets', 'icon.png'), productName: 'MengLuo DSH Desktop',
     onAction: async request => {
       actions.push(request)
+      if (request.type === 'plugins-restart') {
+        state.plugins.busy = true
+        state.plugins.restarting = true
+        state.plugins.progress = { label: '正在重启 Harness', detail: '正在停止后台并重新加载界面，请稍候…' }
+        controller.update(state)
+        await new Promise(resolve => { restartReady = resolve })
+        Object.assign(state.plugins, { busy: false, restarting: false, restartRecommended: false,
+          notice: 'Harness 已重新启动并加载界面，可以继续使用。',
+          progress: { label: '重启完成', detail: 'Harness 已重新启动并加载界面，可以继续使用。', percent: 100 },
+        })
+      }
       if (request.type === 'plugins-search') {
         const revision = ++searchRevision
         if (limitedSearchUntil > Date.now()) {
@@ -433,6 +445,27 @@ async function run() {
     }
   }
   assert.equal(actions.length, actionsBeforeLanguage, 'Changing language never requests plugin data or mutates Harness')
+  controller.show('plugins')
+  const beforeRestart = actions.filter(item => item.type === 'plugins-restart').length
+  Object.assign(state.plugins, { restartRecommended: true,
+    notice: '安装完成。若 Harness 未即时生效，可在保存工作后点击“重启 Harness”加载变更。',
+    progress: { label: '安装完成', detail: '安装完成。若 Harness 未即时生效，可在保存工作后点击“重启 Harness”加载变更。', percent: 100 },
+  })
+  controller.update(state)
+  await expectDom(contents, "!document.getElementById('plugins-restart-actions').hidden && !document.getElementById('plugins-restart').disabled && document.getElementById('plugins-restart').textContent === 'Restart Harness'")
+  assert.equal(await contents.executeJavaScript("document.getElementById('plugins-notice').hidden"), true, 'Do not repeat the identical completion notice')
+  await checkLayout(contents, 'plugin-restart-narrow-en', layouts)
+  await contents.executeJavaScript("document.getElementById('settings-content').scrollTop = 0")
+  await screenshot(contents, 'plugin-restart-en')
+  await contents.executeJavaScript("document.getElementById('plugins-restart').click(); document.getElementById('plugins-restart').click()")
+  await expect(() => Boolean(restartReady))
+  await expectDom(contents, "document.getElementById('plugins-restart').disabled && document.getElementById('plugins-restart').textContent === 'Restarting…' && !document.getElementById('plugins-progress-meter').hasAttribute('value')")
+  assert.equal(actions.filter(item => item.type === 'plugins-restart').length, beforeRestart + 1)
+  restartReady()
+  await expectDom(contents, "document.getElementById('plugins-restart-actions').hidden && document.getElementById('plugins-progress-label').textContent === 'Restart complete'")
+  state.plugins.progress = null
+  state.plugins.notice = ''
+  controller.update(state)
   window.close()
   controller.show('about')
   await expectDom(contents, "document.documentElement.lang === 'en' && document.getElementById('client-language').value === 'en'")

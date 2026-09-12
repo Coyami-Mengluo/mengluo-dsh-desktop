@@ -48,9 +48,11 @@ The first-install page and network settings share one per-user `download-setting
 
 Selecting npmmirror changes only the transport for npm package files. The client first obtains the exact version, dependency graph and SHA-512 integrity values from official npm, then downloads the locked package files through the mirror. A mirror connection failure or missing file can fall back to official npm for the same locked version and dependencies, within the existing timeout budget. Integrity failures are not bypassed; a failed candidate is not activated or silently replaced with an older version.
 
-npmmirror is a third-party service and may lag behind official releases. It is not a guaranteed speedup: official metadata must still be reachable, and dependency resolution, disk verification and startup checks still take time. The connection check reports connectivity and response time, not actual download throughput or whether a target version has synchronized. These settings do not alter the official Harness UI.
+npmmirror is a third-party service and may lag behind official releases. It is not a guaranteed speedup: official metadata must still be reachable, and dependency resolution, disk verification and startup checks still take time. Connection checks also compare the target version's mirror metadata and integrity digest with official npm: the selected first-install version, or the prepared/available/current version in settings. A matching entry does not guarantee that all dependencies or tarballs are synchronized, and this is not a throughput benchmark. These settings do not alter the official Harness UI.
 
 ## Plugins
+
+After installation, update or removal, **Restart Harness** reloads the current backend without closing client windows. Save your work before confirming: running tasks will be interrupted. It does not install a downloaded client update.
 
 Cooldown messages identify local protection, GitHub search quota, plugin metadata quota, or temporary service throttling. Plugin update-check limits do not lock catalog refresh. A GitHub primary reset deadline is used only when that request bucket is exhausted; temporary limits use `Retry-After` or bounded backoff, not an unrelated hourly reset.
 
@@ -109,6 +111,8 @@ The build verifies a compatible local copy of the pinned Node/npm tools or downl
 `dist/` contains the installer, its `.blockmap`, the portable executable and `latest.yml`. Local packaging **never uploads**. See [release instructions](docs/RELEASING.md) for the initial manual installation, publishing order, old-blockmap retention, and verification still needed before a public release.
 
 ## Security and contributions
+
+See the concise [architecture overview](docs/ARCHITECTURE.md) for shell/runtime ownership, the two update paths, plugin recovery and trust boundaries.
 
 See [SECURITY.md](SECURITY.md) for data locations, updater trust assumptions and reporting guidance, and [CONTRIBUTING.md](CONTRIBUTING.md) for development checks. Do not put API keys, logs, conversations, signing keys or personal configuration in an issue or source archive.
 

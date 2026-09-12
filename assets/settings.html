@@ -36,7 +36,7 @@
         <button id="plugin-tab-snapshots" role="tab" aria-controls="plugin-panel-snapshots" aria-selected="false" tabindex="-1" data-plugin-tab="snapshots">本地快照</button>
       </div>
       <div id="plugins-runtime-notice" class="notice" hidden>请先安装并启动 Harness，再安装或管理插件。</div>
-      <div id="plugins-operation" class="card plugin-operation" role="status" hidden><div class="card-heading"><h2 id="plugins-progress-label">正在处理插件…</h2><span id="plugins-progress-percent" class="badge" hidden></span></div><progress id="plugins-progress-meter" max="100" aria-label="插件操作进度"></progress><p id="plugins-progress-detail" class="detail"></p></div>
+      <div id="plugins-operation" class="card plugin-operation" role="status" hidden><div class="card-heading"><h2 id="plugins-progress-label">正在处理插件…</h2><span id="plugins-progress-percent" class="badge" hidden></span></div><progress id="plugins-progress-meter" max="100" aria-label="插件操作进度"></progress><p id="plugins-progress-detail" class="detail"></p><div id="plugins-restart-actions" class="actions" hidden><button id="plugins-restart" class="primary" data-action="plugins-restart">重启 Harness</button></div></div>
       <p id="plugins-error" class="notice plugin-error" role="alert" hidden>操作未完成，请重试或查看日志。</p>
       <p id="plugins-notice" class="notice" hidden></p>
       <div id="plugins-recovery-notice" class="notice plugin-error" role="alert" hidden><p>上次操作未完整结束，插件更改与快照恢复已暂停。请先修复中断的操作，再继续管理插件。</p><div class="actions"><button id="plugins-recover" data-action="plugins-recover">修复中断的恢复</button></div></div>

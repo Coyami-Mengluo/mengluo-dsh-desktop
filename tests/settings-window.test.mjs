@@ -11,7 +11,7 @@ describe('settings action contract', () => {
     for (const type of ['harness-check', 'harness-setup', 'harness-download', 'harness-restart', 'harness-progress',
       'terminal', 'client-check', 'client-download', 'client-install', 'client-progress',
       'open-log', 'open-repository', 'open-official', 'open-client-releases', 'test-connection',
-      'plugins-refresh', 'plugins-check', 'plugins-snapshots', 'plugins-recover']) {
+      'plugins-refresh', 'plugins-check', 'plugins-snapshots', 'plugins-recover', 'plugins-restart']) {
       assert.equal(validateSettingsAction({ type }), true, type)
       assert.equal(validateSettingsAction({ type, url: 'https://untrusted.invalid' }), false, type)
     }

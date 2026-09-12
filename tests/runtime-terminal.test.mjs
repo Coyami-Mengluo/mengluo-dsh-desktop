@@ -10,7 +10,7 @@ import { createHarnessTerminalLaunch, TERMINAL_PNPM_VERSION } from '../src/runti
 const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 describe('Harness terminal launch', () => {
-  it('uses exact slot and shell tooling while removing inherited secrets', () => {
+  it('uses exact slot and shell tooling while removing inherited secrets', { skip: process.platform !== 'win32' && 'Windows drive paths and command-shell layout' }, () => {
     const launch = createHarnessTerminalLaunch({
       platform: 'win32',
       exists: () => true,

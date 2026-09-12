@@ -114,7 +114,7 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
     const catalogPending = plugins.catalogLoading || pluginSearchPending?.query === query
     const operationBusy = plugins.busy || plugins.loading || plugins.checking || plugins.recoveryRequired || plugins.snapshots?.recoveryRequired
       || latest.harness?.status === 'installing' || latest.client?.status === 'installing'
-      || ['plugin-install', 'plugin-update', 'plugin-remove', 'plugin-restore', 'plugins-recover'].some(type => busyActions.has(type))
+      || ['plugin-install', 'plugin-update', 'plugin-remove', 'plugin-restore', 'plugins-recover', 'plugins-restart'].some(type => busyActions.has(type))
     return { plugins, query, currentQuery, catalogQuery, draftPending, catalogPending, operationBusy }
   }
   function renderSnapshots(plugins, operationBusy) {
@@ -124,7 +124,7 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
     const runtimeVersion = latest.about?.harnessVersion || latest.harness?.version
     const repairBusy = plugins.busy || plugins.loading || plugins.checking || loading
       || latest.harness?.status === 'installing' || latest.client?.status === 'installing'
-      || ['plugin-install', 'plugin-update', 'plugin-remove', 'plugin-restore', 'plugins-recover'].some(type => busyActions.has(type))
+      || ['plugin-install', 'plugin-update', 'plugin-remove', 'plugin-restore', 'plugins-recover', 'plugins-restart'].some(type => busyActions.has(type))
     show('plugins-recovery-notice', Boolean(plugins.recoveryRequired || snapshots.recoveryRequired))
     show('plugins-recover', Boolean(snapshots.recoveryRequired))
     disable('plugins-recover', repairBusy)
@@ -326,18 +326,25 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
     if (!pluginSearchEdited && typeof plugins.query === 'string') byId('plugin-search').value = plugins.query
     const { operationBusy } = pluginView()
     const progress = plugins.progress ?? {}
+    const restartRecommended = plugins.restartRecommended === true
+    const showProgress = Boolean(plugins.busy || plugins.progress)
     show('plugins-runtime-notice', !plugins.installedRuntime)
-    show('plugins-operation', Boolean(plugins.busy || plugins.progress))
-    text('plugins-progress-label', tr(pluginText(progress.label, 160)) || tr('正在处理插件…'))
-    text('plugins-progress-detail', tr(pluginText(progress.detail, 512)) || tr('正在通过当前 Harness 的插件管理机制处理，请稍候。'))
+    show('plugins-operation', showProgress || restartRecommended)
+    text('plugins-progress-label', tr(pluginText(progress.label, 160)) || (restartRecommended && !plugins.busy ? tr('插件变更待加载') : tr('正在处理插件…')))
+    text('plugins-progress-detail', tr(pluginText(progress.detail, 512)) || (restartRecommended && !plugins.busy
+      ? tr('保存工作后可重启 Harness，加载插件变更。') : tr('正在通过当前 Harness 的插件管理机制处理，请稍候。')))
     const percent = Number.isFinite(progress.percent) ? Math.max(0, Math.min(100, progress.percent)) : undefined
     if (percent !== undefined) byId('plugins-progress-meter').value = percent
     else byId('plugins-progress-meter').removeAttribute('value')
+    show('plugins-progress-meter', showProgress)
     show('plugins-progress-percent', percent !== undefined)
     text('plugins-progress-percent', percent !== undefined ? `${Math.floor(percent)}%` : '')
     show('plugins-error', Boolean(plugins.error))
     text('plugins-notice', tr(pluginText(plugins.notice, 800)))
-    show('plugins-notice', Boolean(plugins.notice))
+    show('plugins-notice', Boolean(plugins.notice && plugins.notice !== progress.detail))
+    show('plugins-restart-actions', restartRecommended)
+    text('plugins-restart', plugins.restarting ? tr('正在重启…') : tr('重启 Harness'))
+    disable('plugins-restart', !plugins.installedRuntime || operationBusy || plugins.snapshots?.loading)
     text('plugin-installed-count', installed.length)
     renderPluginControls()
     const checked = plugins.checkedAt ? new Date(plugins.checkedAt) : undefined

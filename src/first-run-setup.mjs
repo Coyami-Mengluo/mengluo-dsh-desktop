@@ -116,13 +116,14 @@ export function createFirstRunSetup(options) {
       publish({})
     }
   }
-  const testConnection = async () => {
+  const testConnection = async version => {
     assertDownloadIdle()
+    if (version !== undefined && !catalog.some(release => release.version === version)) throw new Error('请选择版本列表中的目标版本后再检测')
     if (typeof options.downloadSettings?.testConnection !== 'function') throw new Error('当前无法检测下载源连接')
     connectionTesting = true
     publish({ connectionResult: undefined })
     try {
-      const result = await options.downloadSettings.testConnection()
+      const result = await options.downloadSettings.testConnection(version)
       publish({ connectionResult: { ok: result?.ok === true, message: String(result?.message ?? '连接检测已完成') } })
     } catch (error) {
       publish({ connectionResult: { ok: false, message: `连接检测失败：${error.message ?? String(error)}` } })
@@ -138,6 +139,7 @@ export function createFirstRunSetup(options) {
     else if (request.type === 'install' && Object.keys(request).length === 2 && typeof request.version === 'string') await install(request.version)
     else if (request.type === 'download-source' && Object.keys(request).length === 2 && typeof request.source === 'string') await setDownloadSource(request.source)
     else if (request.type === 'test-connection' && Object.keys(request).length === 1) await testConnection()
+    else if (request.type === 'test-connection' && Object.keys(request).length === 2 && typeof request.version === 'string') await testConnection(request.version)
     else throw new Error('不支持的安装操作')
   }
   ipcMain.on(SETUP_IPC.ready, handleReady)

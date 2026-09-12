@@ -6,10 +6,14 @@ This log records client features, improvements, fixes and public releases. Inter
 
 ## 0.5.7 — Unreleased / 未发布
 
+- Added a confirmed “Restart Harness” button after plugin changes, with startup readiness checks; no need to close the client manually.
+- Enhanced connection checks with target-version mirror metadata and official integrity-digest comparison, distinguishing missing, inconsistent and unconfirmed metadata from connectivity failures.
 - Added live client-language switching: follow system, Simplified Chinese, or English. Official Harness UI and community plugin content remain unchanged.
 - Improved titlebar theme-color response while retaining smooth gradient transitions.
 - Fixed plugin metadata cooldowns incorrectly locking catalog refresh and GitHub secondary limits incorrectly inheriting an unrelated hourly reset. Cooldown messages now identify their source.
 
+- 新增插件操作后的“重启 Harness”按钮，确认后重启后台并检查界面就绪，无需手动退出客户端。
+- 增强连接检测：检查镜像目标版本元数据并比对官方完整性摘要，区分未同步、不一致、未确认和连接失败。
 - 新增客户端界面语言切换：跟随系统、简体中文、English，即时生效，不改变官方 Harness 界面和社区插件内容。
 - 提高顶栏主题颜色响应速度，保留渐变匹配与平滑过渡。
 - 修复插件信息检查冷却误锁目录刷新，以及 GitHub 临时限流错误沿用小时额度重置时间的问题；冷却提示明确标示限制来源。

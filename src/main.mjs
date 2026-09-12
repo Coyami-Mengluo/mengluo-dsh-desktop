@@ -39,6 +39,7 @@ import { DesktopSettingsController } from './settings-controller.mjs'
 import { PluginCatalog } from './plugin-catalog.mjs'
 import { PluginManager } from './plugin-manager.mjs'
 import { resolvePluginHome } from './plugin-runtime.mjs'
+import { createBackendReadiness } from './backend-readiness.mjs'
 
 const APP_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const LEGACY_PRODUCT_NAME = 'MengLuo AI'
@@ -55,6 +56,7 @@ let mainWindow
 let backend
 let backendOrigin
 let backendExit
+let backendReadiness
 let logStream
 let logPath
 let startupTimer
@@ -283,6 +285,10 @@ async function startApplication() {
     npmCliPath: updaterNpmCliPath, terminalBinPath, workspacePath,
     resolveProxy: url => updateManager.resolveSystemProxy('Harness plugin', url),
     withBackendStopped: withPluginBackendStopped,
+    restartBackend: async runtime => {
+      if (runtime !== selectedRuntime) throw new Error('plugin restart runtime changed')
+      await withPluginBackendStopped(async () => {}, { waitUntilReady: true })
+    },
     showMessage: options => settingsWindow?.window && !settingsWindow.window.isDestroyed()
       ? dialog.showMessageBox(settingsWindow.window, options) : dialog.showMessageBox(options),
     openExternal: openExternalUrl,
@@ -328,7 +334,7 @@ async function startApplication() {
     downloadSettings: {
       getState: () => settingsController.getDownloadState(),
       setSource: source => settingsController.setDownloadSource(source),
-      testConnection: () => settingsController.testConnection(),
+      testConnection: version => settingsController.testConnection(version),
     },
     onInstalled: runtime => {
       if (quitStarted) return
@@ -369,19 +375,27 @@ function openExternalUrl(url) {
 /** Spawn the selected official CLI under its own standalone Node runtime. */
 function startBackend(runtime) {
   if (quitStarted || pluginBackendPaused || pluginManager?.snapshotRecoveryRequired) return
+  backendReadiness?.fail()
+  const readiness = createBackendReadiness({
+    timeoutMs: STARTUP_TIMEOUT_MS + 15_000,
+    onTimeout: () => {
+      if (backendReadiness === readiness) void handleBackendStartupFailure('Harness 界面未能在预期时间内完成加载。')
+    },
+  })
+  backendReadiness = readiness
   desktopWindow?.showLoading()
   const cliPath = runtime.cliPath
   if (!existsSync(runtime.nodePath)) {
     void handleBackendStartupFailure(`找不到 Harness runtime 的 Node：${runtime.nodePath}`)
-    return
+    return readiness.promise
   }
   if (backendRunnerPath === undefined || !existsSync(backendRunnerPath)) {
     void handleBackendStartupFailure(`找不到 Harness 后台启动器：${backendRunnerPath ?? '尚未解析'}`)
-    return
+    return readiness.promise
   }
   if (!existsSync(cliPath)) {
     void handleBackendStartupFailure(`找不到 Harness 后台：${cliPath}`)
-    return
+    return readiness.promise
   }
 
   const workspace = resolveWorkspacePath()
@@ -408,7 +422,7 @@ function startBackend(runtime) {
   const exit = backendExit
   observeHarnessOutput(child, {
     log: appendLog,
-    onReady: url => { acceptReadyUrl(url, child) },
+    onReady: url => { acceptReadyUrl(url, child, readiness) },
   })
   child.on('error', (error) => {
     appendLog('desktop', `backend process error: ${error.message}\n`)
@@ -434,6 +448,7 @@ function startBackend(runtime) {
   startupTimer = setTimeout(() => {
     void handleBackendStartupFailure(`Harness 后台在 ${String(STARTUP_TIMEOUT_MS / 1_000)} 秒内没有完成启动。`)
   }, STARTUP_TIMEOUT_MS)
+  return readiness.promise
 }
 
 /** @returns {string} working directory shared by Harness home resolution and the backend. */
@@ -459,7 +474,7 @@ function preserveLegacyUserData() {
  * @param {string} readyUrl validated URL emitted by the supervised backend.
  * @param {import('node:child_process').ChildProcess} child emitting process.
  */
-function acceptReadyUrl(readyUrl, child) {
+function acceptReadyUrl(readyUrl, child, readiness) {
   if (pluginBackendPaused || backend !== child || backendOrigin !== undefined || failureShown) return
   const ready = new URL(readyUrl)
   backendOrigin = ready.origin
@@ -470,18 +485,20 @@ function acceptReadyUrl(readyUrl, child) {
   const runtime = selectedRuntime
   const host = desktopWindow
   if (runtime === undefined || host === undefined) return
-  void loadReadyRenderer(host, readyUrl, child, runtime)
+  void loadReadyRenderer(host, readyUrl, child, runtime, readiness)
 }
 
 /** Commit a managed slot only after Chromium loaded it and stayed alive briefly. */
-async function loadReadyRenderer(host, readyUrl, child, runtime) {
+async function loadReadyRenderer(host, readyUrl, child, runtime, readiness) {
   try {
     await host.loadOfficial(readyUrl)
     await new Promise(resolve => { setTimeout(resolve, RENDERER_STABILITY_MS) })
-    if (quitStarted || pluginBackendPaused || failureShown || backend !== child || host.window.isDestroyed()) return
+    if (quitStarted || pluginBackendPaused || failureShown || backend !== child || host.window.isDestroyed()) { readiness.fail(); return }
     updateManager?.runtimeReady(runtime)
     firstRunSetup?.complete()
+    readiness.ready()
   } catch (error) {
+    readiness.fail(error)
     if (backend !== child || quitStarted || pluginBackendPaused) return
     await handleBackendStartupFailure(`无法载入 ${PRODUCT_NAME} 界面：${error instanceof Error ? error.message : String(error)}`)
   }
@@ -501,6 +518,7 @@ function handleRendererGone(kind, details) {
 /** Stop a failed runtime before selecting a verified old slot or returning to installation. */
 async function handleBackendStartupFailure(reason) {
   if (quitStarted || pluginBackendPaused || failureShown || startupFailureHandling) return
+  backendReadiness?.fail(new Error(reason))
   startupFailureHandling = true
   clearStartupTimer()
   appendLog('desktop', `${reason}\n`)
@@ -596,6 +614,7 @@ function appendLog(source, value) {
  */
 function showFailure(reason) {
   if (failureShown || quitStarted) return
+  backendReadiness?.fail(new Error(reason))
   desktopTray?.showWindow()
   reason = redactHarnessTokens(reason)
   failureShown = true
@@ -626,7 +645,7 @@ function clearStartupTimer() {
 }
 
 /** A restore must never swap live plugin files underneath the supervised backend. */
-async function withPluginBackendStopped(operation) {
+async function withPluginBackendStopped(operation, { waitUntilReady = false } = {}) {
   if (quitStarted || pluginBackendPaused || startupFailureHandling || pluginManager?.recoveryRequired) throw new Error('plugin backend pause unavailable')
   pluginBackendPaused = true
   const runtime = selectedRuntime
@@ -645,7 +664,13 @@ async function withPluginBackendStopped(operation) {
     if (stopped && !quitStarted && !pluginManager?.snapshotRecoveryRequired) {
       failureShown = false
       startupFailureHandling = false
-      if (runtime) startBackend(runtime)
+      if (runtime) {
+        const ready = startBackend(runtime)
+        if (waitUntilReady) {
+          if (!ready) throw new Error('plugin backend restart unavailable')
+          await ready
+        }
+      }
       else await firstRunSetup?.show()
     } else if (!stopped && backendOrigin !== undefined) {
       // A failed shutdown did not authorize a file restore; keep the still-live UI accessible.
@@ -657,6 +682,7 @@ async function withPluginBackendStopped(operation) {
 
 /** Ask the CLI to dispose, then terminate its recorded process tree on timeout. */
 async function shutdownBackend() {
+  backendReadiness?.fail()
   clearStartupTimer()
   const child = backend
   if (child === undefined || backendExit === undefined || hasExited(child)) return

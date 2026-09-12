@@ -259,7 +259,8 @@ export function markRuntimeReady(state, runtime) {
   if (runtime.source !== 'managed') return next
   if (next.activeVersion !== runtime.version) next.previousVersion = next.activeVersion
   next.activeVersion = runtime.version
-  next.pendingVersion = undefined
+  // Restarting the current backend must not discard a separately prepared update.
+  if (next.pendingVersion === runtime.version) next.pendingVersion = undefined
   next.badVersions = next.badVersions.filter(version => version !== runtime.version)
   return next
 }

@@ -1,6 +1,7 @@
 import { DOWNLOAD_SOURCES, readDownloadPreferences, resolveDownloadSource, writeDownloadPreferences } from './download-source.mjs'
 import { parseResolvedProxy } from './update-manager.mjs'
 import { validateSettingsAction } from './settings-window.mjs'
+import { describeRegistryVersion, probeRegistryVersion } from './registry-probe.mjs'
 
 /** Main-process settings actions. Renderer data can select actions, never paths, commands or URLs. */
 export class DesktopSettingsController {
@@ -89,11 +90,13 @@ export class DesktopSettingsController {
     }
   }
 
-  testConnection() {
+  testConnection(requestedVersion) {
     if (this.disposed) return Promise.resolve({ ok: false, message: '客户端正在退出。' })
     if (this.probePromise) return this.probePromise
     if (this.isHarnessBusy()) return Promise.resolve({ ok: false, message: '请等待当前 Harness 操作结束后再检测。' })
     const selected = resolveDownloadSource(this.preferences.source)
+    const harness = this.options.harness
+    const version = requestedVersion ?? harness.state.pendingVersion ?? harness.availableRelease?.version ?? harness.currentRuntime?.version
     const sources = selected.id === 'official' ? [selected] : [selected, resolveDownloadSource('official')]
     const controller = new AbortController()
     this.probeAbort = controller
@@ -101,7 +104,7 @@ export class DesktopSettingsController {
     this.probe = { status: 'checking', detail: '正在检查下载源和官方元数据服务的连接…' }
     this.refresh()
     this.probePromise = (async () => {
-      const results = await Promise.all(sources.map(async source => {
+      const [results, synchronization] = await Promise.all([Promise.all(sources.map(async source => {
         const start = Date.now()
         try {
           const response = await this.options.net.fetch(new URL('-/ping', source.registry).href, {
@@ -110,12 +113,13 @@ export class DesktopSettingsController {
           await response.body?.cancel()
           return { source, ok: response.status === 200, elapsed: Date.now() - start }
         } catch { return { source, ok: false } }
-      }))
+      })), probeRegistryVersion({ fetch: (...args) => this.options.net.fetch(...args), source: selected.id, version, signal: controller.signal })])
       if (this.disposed) return { ok: false, message: '检测已结束。' }
-      const ok = results.every(item => item.ok)
-      const detail = results.map(item => `${item.source.label}：${item.ok ? `连接正常（${item.elapsed} ms）` : '连接失败，请检查网络或系统代理'}`).join('；')
-        + '。此检测不代表下载速度或目标版本已同步。'
-      this.probe = { status: ok ? 'success' : 'error', detail }
+      const connected = results.every(item => item.ok)
+      const ok = connected && ['not-selected', 'official', 'synced'].includes(synchronization.status)
+      const detail = [...results.map(item => `${item.source.label}：${item.ok ? `连接正常（${item.elapsed} ms）` : '连接失败，请检查网络或系统代理'}`),
+        describeRegistryVersion(synchronization), '此检测不代表实际下载速度，也不保证依赖和文件均已同步。'].join('\n')
+      this.probe = { status: ok ? 'success' : connected ? 'warning' : 'error', detail, synchronization }
       return { ok, message: detail }
     })().finally(() => {
       clearTimeout(timer)

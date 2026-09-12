@@ -6,6 +6,7 @@ import { app, BrowserWindow, dialog, Menu, net } from 'electron'
 
 const [temporary, application, resources, recoveryArgument] = process.argv.slice(2)
 const snapshotRecovery = recoveryArgument === '--snapshot-recovery'
+const pluginRestart = recoveryArgument === '--plugin-restart'
 for (const name of ['appData', 'documents', 'sessionData', 'dsh']) mkdirSync(join(temporary, name))
 app.setPath('appData', join(temporary, 'appData'))
 app.setPath('documents', join(temporary, 'documents'))
@@ -27,8 +28,14 @@ Menu.buildFromTemplate = function (template) { menus.push(template); return buil
 const fail = error => { process.stderr.write(`${error.stack ?? error}\n`); app.exit(1) }
 dialog.showErrorBox = (title, message) => fail(new Error(`${title}: ${message}`))
 let recoveryConfirmations = 0
+let restartConfirmations = 0
 dialog.showMessageBox = async (...args) => {
   const options = args.at(-1)
+  if (pluginRestart && options.title === '重启 Harness') {
+    assert.equal(options.defaultId, 1)
+    restartConfirmations++
+    return { response: 0 }
+  }
   if (snapshotRecovery && options.title === '修复中断的插件回滚') {
     assert.equal(options.defaultId, 1)
     recoveryConfirmations += 1
@@ -76,6 +83,11 @@ async function waitFor(predicate) {
 async function run() {
   await app.whenReady()
   let snapshotStore
+  let verifyRestart
+  if (pluginRestart) {
+    const { prepareRestartFixture } = await import('./plugin-restart-smoke.mjs')
+    verifyRestart = await prepareRestartFixture({ application, profile, dshHome: process.env.DSH_HOME, menus, waitFor })
+  }
   if (snapshotRecovery) {
     const { PluginSnapshots } = await import(pathToFileURL(join(application, 'src', 'plugin-snapshots.mjs')).href)
     snapshotStore = new PluginSnapshots({ userData: profile, dshHome: process.env.DSH_HOME,
@@ -88,6 +100,14 @@ async function run() {
     assert.equal((await snapshotStore.getRecoveryState()).recoveryRequired, true)
   }
   await import(pathToFileURL(join(application, 'src', 'main.mjs')).href)
+  if (pluginRestart) {
+    await verifyRestart()
+    assert.equal(restartConfirmations, 1)
+    assert.equal(quitRequests, 0)
+    verified = true
+    app.quit()
+    return
+  }
   if (snapshotRecovery) {
     const recoverySettings = await waitFor(async () => {
       const candidate = BrowserWindow.getAllWindows().find(item => item.webContents.getURL().endsWith('/settings.html'))
@@ -161,6 +181,7 @@ async function run() {
   for (const type of ['plugin-install', 'plugin-update', 'plugin-remove']) {
     assert.equal((await settings.webContents.executeJavaScript(`window.clientSettings.action({type:'${type}',id:'github:example/theme'})`)).ok, false)
   }
+  assert.equal((await settings.webContents.executeJavaScript("window.clientSettings.action({type:'plugins-restart'})")).ok, false)
   assert.equal(requests.length, beforePlugins + 1, 'Rejected plugin mutations and empty-inventory checks do not make more requests')
   await settings.webContents.executeJavaScript("document.getElementById('plugin-tab-store').click()")
   await new Promise(resolve => setTimeout(resolve, 1050)) // Respect the real search dispatch gap.

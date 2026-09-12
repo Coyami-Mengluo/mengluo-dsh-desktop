@@ -13,7 +13,7 @@ const SIMPLE_ACTIONS = new Set([
   'harness-check', 'harness-setup', 'harness-download', 'harness-restart', 'harness-progress',
   'terminal', 'client-check', 'client-download', 'client-install', 'client-progress',
   'open-log', 'open-repository', 'open-official', 'open-client-releases', 'test-connection',
-  'plugins-refresh', 'plugins-check', 'plugins-snapshots', 'plugins-recover',
+  'plugins-refresh', 'plugins-check', 'plugins-snapshots', 'plugins-recover', 'plugins-restart',
 ])
 const PLUGIN_ACTIONS = new Set(['plugin-install', 'plugin-update', 'plugin-remove', 'plugin-source'])
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)

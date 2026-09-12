@@ -40,6 +40,8 @@ export class PluginManager {
     this.updates = new Map()
     this.updateIdentities = new Map()
     this.busy = false
+    this.restarting = false
+    this.restartRecommended = false
     this.loading = false
     this.checking = false
     this.checkedAt = undefined
@@ -80,6 +82,7 @@ export class PluginManager {
     return {
       installedRuntime: Boolean(this.options.getRuntime()), loading: this.loading,
       busy: this.busy || blocked, checking: this.checking, checkedAt: this.checkedAt,
+      restarting: this.restarting, restartRecommended: this.restartRecommended,
       recoveryRequired: this.recoveryRequired,
       snapshots: { items: this.snapshotItems, loading: this.snapshotsLoading, error: this.snapshotError,
         recoveryRequired: this.snapshotRecoveryRequired },
@@ -408,6 +411,7 @@ export class PluginManager {
 
   async handleAction(request) {
     if (this.disposed) return { ok: false }
+    if (request.type === 'plugins-restart') return this.restartHarness()
     if (request.type === 'plugins-snapshots') return this.busy ? { ok: false } : this.refreshSnapshots()
     if (request.type === 'plugin-restore') return this.restoreSnapshot(request.id)
     if (request.type === 'plugins-recover') return this.restoreSnapshot(undefined, { recover: true })
@@ -427,6 +431,42 @@ export class PluginManager {
     }
     const action = { 'plugin-install': 'install', 'plugin-update': 'update', 'plugin-remove': 'remove' }[request.type]
     return action ? this.mutate(action, request.id) : { ok: false }
+  }
+
+  /** Restart the current supervised backend, never the shell's pending installer. */
+  async restartHarness() {
+    if (this.disposed || !this.restartRecommended || this.blocksUpdates() || this.loading || this.checking
+      || this.snapshotsLoading || this.options.isBlocked?.() || typeof this.options.restartBackend !== 'function') return { ok: false }
+    const runtime = this.options.getRuntime()
+    if (!runtime) return { ok: false }
+    // Also locks automatic updates while the native confirmation is open.
+    this.busy = true
+    this.error = ''
+    this.changed()
+    try {
+      const choice = await this.options.showMessage({
+        type: 'warning', title: '重启 Harness', message: '现在重启 Harness 以加载插件变更？',
+        detail: '正在执行的任务会中断，请先保存工作、结束重要任务，并关闭正在修改插件的终端。\n\n仅重启当前 Harness 后台，客户端窗口保持打开；不会安装已下载的客户端更新。',
+        buttons: ['重启 Harness', '取消'], defaultId: 1, cancelId: 1, noLink: true,
+      })
+      if (choice.response !== 0) return { ok: true, cancelled: true }
+      if (this.disposed || this.options.isBlocked?.() || this.options.getRuntime() !== runtime
+        || this.recoveryRequired || this.snapshotRecoveryRequired) throw new Error('Harness state changed before restart')
+      this.restarting = true
+      this.progress = { label: '正在重启 Harness', detail: '正在停止后台并重新加载界面，请稍候…' }
+      this.changed()
+      await this.options.restartBackend(runtime)
+      if (this.disposed || this.options.getRuntime() !== runtime) throw new Error('Harness runtime changed during restart')
+      this.restartRecommended = false
+      this.notice = 'Harness 已重新启动并加载界面，可以继续使用。'
+      this.progress = { label: '重启完成', detail: this.notice, percent: 100 }
+      return { ok: true }
+    } catch (error) {
+      this.error = 'Harness 重启未完成，请检查运行日志和后台状态后重试。插件文件未因重启操作而更改。'
+      this.progress = null
+      this.log(`plugin backend restart failed: ${String(error).slice(0, 700)}\n`)
+      return { ok: false, message: this.error }
+    } finally { this.busy = false; this.restarting = false; this.changed() }
   }
 
   async mutate(action, id) {
@@ -493,6 +533,7 @@ export class PluginManager {
         onProgress: progress => { this.progress = progress; this.changed() },
         log: text => this.log(text),
       })
+      this.restartRecommended = true
       let saved = true
       try { this.saveRecord(name, candidate) } catch { saved = false }
       await this.snapshots.markAfter(snapshot.id, { status: 'success' })
@@ -500,7 +541,7 @@ export class PluginManager {
       this.inventory()
       this.updates.delete(name)
       this.updateIdentities.delete(name)
-      this.notice = `${label}完成。若 Harness 未即时生效，请结束任务后退出并重新打开客户端。${saved ? '' : '更新来源记录未保存，后续可能需要手动查看仓库更新。'}`
+      this.notice = `${label}完成。若 Harness 未即时生效，可在保存工作后点击“重启 Harness”加载变更。${saved ? '' : '更新来源记录未保存，后续可能需要手动查看仓库更新。'}`
       this.progress = { label: `${label}完成`, detail: this.notice, percent: 100 }
       return { ok: true }
     } catch (error) {

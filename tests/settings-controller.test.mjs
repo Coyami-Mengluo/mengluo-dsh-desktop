@@ -28,6 +28,7 @@ describe('desktop settings controller', () => {
     assert.equal(world.changes.at(-1).plugins, snapshot)
     for (const request of [
       { type: 'plugins-refresh' }, { type: 'plugins-check' },
+      { type: 'plugins-restart' },
       { type: 'plugin-install', id: 'github:example/theme' },
       { type: 'plugin-source', id: 'github:example/theme' },
       { type: 'plugin-update', id: '@example/theme' },
@@ -41,6 +42,7 @@ describe('desktop settings controller', () => {
     const count = pluginCalls.length
     for (const request of [
       { type: 'plugins-refresh', url: 'https://untrusted.invalid' },
+      { type: 'plugins-restart', command: 'npm install' },
       { type: 'plugin-install', id: 'github:example/theme', command: 'npm install' },
       { type: 'plugin-update', id: 'https://github.com/example/theme' },
       { type: 'plugin-auto-update', id: '@example/theme' },
@@ -216,11 +218,38 @@ describe('desktop settings controller', () => {
       assert.ok(init.signal instanceof AbortSignal)
       assert.equal(init.headers, undefined)
     }
-    assert.match(result.message, /不代表下载速度或目标版本已同步/u)
+    assert.match(result.message, /尚未选择有效目标版本/u)
+    assert.match(result.message, /不保证依赖和文件均已同步/u)
     world.fetches.length = 0
     world.controller.setDownloadSource('official')
     await world.controller.testConnection()
     assert.deepEqual(world.fetches.map(([url]) => url), ['https://registry.npmjs.org/-/ping'])
+  })
+
+  it('checks the prepared/available/current target and does not treat a connected unsynchronized mirror as ready', async () => {
+    const world = fixture()
+    const harness = world.options.harness
+    harness.state.pendingVersion = '1.2.3'
+    harness.availableRelease = { version: '1.2.2' }
+    harness.currentRuntime = { version: '1.2.1' }
+    world.controller.setDownloadSource('npmmirror')
+    world.options.net.fetch = async (url, init) => {
+      world.fetches.push([url, init])
+      if (url.endsWith('/-/ping')) return new Response('{}')
+      if (url.includes('npmmirror')) return new Response('', { status: 404 })
+      return new Response(JSON.stringify({ name: '@deepseek-ai/dsh', version: url.split('/').at(-1), dist: { integrity: `sha512-${Buffer.alloc(64).toString('base64')}` } }))
+    }
+    for (const expected of ['1.2.3', '1.2.2', '1.2.1']) {
+      assert.equal((await world.controller.testConnection()).ok, false)
+      assert.equal(world.controller.probe.status, 'warning')
+      assert.deepEqual(world.controller.probe.synchronization, { status: 'missing', version: expected })
+      assert.match(world.controller.probe.detail, /镜像尚未提供/u)
+      if (expected === '1.2.3') harness.state.pendingVersion = undefined
+      else harness.availableRelease = undefined
+    }
+    assert.equal((await world.controller.testConnection('1.0.0')).ok, false)
+    assert.equal(world.controller.probe.synchronization.version, '1.0.0')
+    assert.equal(world.calls.length, 0)
   })
 
   it('reports a failed probe when either the mirror or official metadata connection fails', async () => {

@@ -43,7 +43,7 @@ contextBridge.exposeInMainWorld('harnessSetup', Object.freeze({
   refresh() { return ipcRenderer.invoke('mengluo:setup:action', { type: 'refresh' }) },
   install(version) { return ipcRenderer.invoke('mengluo:setup:action', { type: 'install', version }) },
   setDownloadSource(source) { return ipcRenderer.invoke('mengluo:setup:action', { type: 'download-source', source }) },
-  testConnection() { return ipcRenderer.invoke('mengluo:setup:action', { type: 'test-connection' }) },
+  testConnection(version) { return ipcRenderer.invoke('mengluo:setup:action', { type: 'test-connection', ...(version === undefined ? {} : { version }) }) },
   onState(listener) {
     if (typeof listener !== 'function') throw new TypeError('setup listener must be a function')
     const handler = (_event, state) => { listener(state) }

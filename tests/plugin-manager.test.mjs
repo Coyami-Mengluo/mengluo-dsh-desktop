@@ -426,6 +426,96 @@ describe('plugin snapshot coordination', () => {
   })
 })
 
+describe('explicit plugin backend restart', () => {
+  it('offers a restart after install/update/remove but never starts it automatically', async () => {
+    for (const action of ['install', 'update', 'remove']) {
+      const world = fixture()
+      let restarts = 0
+      world.options.restartBackend = async () => { restarts++ }
+      if (action !== 'install') world.items.push(plugin())
+      assert.equal(world.manager.getState().restartRecommended, false)
+      await world.manager.refresh()
+      assert.equal((await world.manager.handleAction({ type: `plugin-${action}`, id: action === 'install' ? candidate().id : plugin().id })).ok, true)
+      assert.equal(world.manager.getState().restartRecommended, true)
+      assert.match(world.manager.getState().notice, /点击“重启 Harness”/u)
+      assert.equal(restarts, 0)
+    }
+  })
+
+  it('locks before confirmation, keeps the completion card on cancel and waits for backend readiness', async () => {
+    const world = fixture()
+    world.manager.restartRecommended = true
+    world.manager.progress = { label: '安装完成', percent: 100 }
+    const confirmed = Promise.withResolvers(), ready = Promise.withResolvers()
+    let restarts = 0
+    world.options.restartBackend = runtime => {
+      assert.equal(runtime, world.runtime)
+      restarts++
+      return ready.promise
+    }
+    world.options.showMessage = async options => {
+      assert.equal(options.defaultId, 1)
+      assert.equal(options.cancelId, 1)
+      assert.match(options.detail, /任务会中断/u)
+      return confirmed.promise
+    }
+    const cancelled = world.manager.handleAction({ type: 'plugins-restart' })
+    assert.equal(world.manager.blocksUpdates(), true)
+    assert.equal((await world.manager.handleAction({ type: 'plugins-restart' })).ok, false)
+    confirmed.resolve({ response: 1 })
+    assert.equal((await cancelled).cancelled, true)
+    assert.equal(world.manager.getState().progress.percent, 100)
+    assert.equal(world.manager.restartRecommended, true)
+    assert.equal(restarts, 0)
+    world.options.showMessage = async () => ({ response: 0 })
+    const restart = world.manager.handleAction({ type: 'plugins-restart' })
+    await Promise.resolve()
+    assert.equal(restarts, 1)
+    assert.equal(world.manager.getState().restarting, true)
+    assert.equal(world.manager.getState().progress.percent, undefined)
+    assert.equal((await world.manager.handleAction({ type: 'plugin-remove', id: plugin().id })).ok, false)
+    assert.equal((await world.manager.handleAction({ type: 'plugins-restart' })).ok, false)
+    ready.resolve()
+    assert.equal((await restart).ok, true)
+    assert.equal(world.manager.restartRecommended, false)
+    assert.equal(world.manager.getState().progress.label, '重启完成')
+    assert.equal(world.manager.blocksUpdates(), false)
+    assert.equal(world.operations.length, 0)
+  })
+
+  it('rejects missing runtime, busy/recovery states and a runtime changed during confirmation', async () => {
+    for (const reason of ['runtime', 'busy', 'loading', 'checking', 'snapshotsLoading', 'recoveryRequired', 'snapshotRecoveryRequired', 'changed', 'disposed']) {
+      const world = fixture()
+      world.manager.restartRecommended = true
+      let restarts = 0
+      world.options.restartBackend = async () => { restarts++ }
+      if (reason === 'runtime') world.runtime = undefined
+      else if (reason === 'busy') world.blocked = true
+      else if (reason === 'changed') world.options.showMessage = async () => { world.runtime = { ...world.runtime }; return { response: 0 } }
+      else world.manager[reason] = true
+      assert.equal((await world.manager.handleAction({ type: 'plugins-restart' })).ok, false, reason)
+      assert.equal(restarts, 0, reason)
+      assert.equal(world.manager.restartRecommended, true)
+    }
+  })
+
+  it('retains a retry after shutdown/start failure and does not expose raw diagnostics', async () => {
+    const world = fixture()
+    world.manager.restartRecommended = true
+    world.options.restartBackend = async () => { throw new Error('private token=diagnostic') }
+    const result = await world.manager.handleAction({ type: 'plugins-restart' })
+    assert.equal(result.ok, false)
+    assert.doesNotMatch(result.message, /private|token=/u)
+    assert.equal(world.manager.restartRecommended, true)
+    assert.equal(world.manager.isBusy(), false)
+    assert.equal(world.manager.restarting, false)
+    assert.equal(world.manager.progress, null)
+    assert.equal(world.operations.length, 0)
+    world.options.restartBackend = async () => {}
+    assert.equal((await world.manager.handleAction({ type: 'plugins-restart' })).ok, true)
+  })
+})
+
 function seedProfile(world) {
   const profile = join(world.root, 'dsh', 'profiles', 'web')
   mkdirSync(join(profile, 'node_modules', 'example-plugin'), { recursive: true })

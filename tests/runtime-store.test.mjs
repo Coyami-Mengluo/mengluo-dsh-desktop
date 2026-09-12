@@ -91,6 +91,14 @@ describe('desktop runtime store', () => {
     assert.deepEqual(failed.badVersions, ['1.3.0'])
   })
 
+  it('keeps a different pending slot while restarting the already active runtime', () => {
+    const state = { ...defaultRuntimeState(), activeVersion: '1.2.3', pendingVersion: '1.3.0', previousVersion: '1.2.2' }
+    const ready = markRuntimeReady(state, { source: 'managed', version: '1.2.3' })
+    assert.equal(ready.pendingVersion, '1.3.0')
+    assert.equal(ready.previousVersion, '1.2.2')
+    assert.equal(state.pendingVersion, '1.3.0')
+  })
+
   it('never derives a runtime path from invalid SemVer text', () => {
     const userData = temporaryDirectory()
     assert.throws(() => managedRuntimeDirectory(userData, '..\\escape'), /invalid semantic version/u)

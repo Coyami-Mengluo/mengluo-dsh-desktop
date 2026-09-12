@@ -109,7 +109,7 @@ import { createProgressMeter } from './progress-meter.js'
     sourceStatus.textContent = tr(error.message ?? String(error))
   }
   source.addEventListener('change', () => { void window.harnessSetup.setDownloadSource(source.value).catch(reportSource) })
-  sourceTest.addEventListener('click', () => { void window.harnessSetup.testConnection().catch(reportSource) })
+  sourceTest.addEventListener('click', () => { void window.harnessSetup.testConnection(select.value || undefined).catch(reportSource) })
   refresh.addEventListener('click', () => { void window.harnessSetup.refresh().catch(report) })
   install.addEventListener('click', () => { void window.harnessSetup.install(select.value).catch(report) })
   const timer = setInterval(renderTiming, 1000)
