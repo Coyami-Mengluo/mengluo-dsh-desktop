@@ -4,7 +4,7 @@ This log records client features, improvements, fixes and public releases. Inter
 
 本日志记录客户端新增功能、改进、修复和公开版本。0.5.3、0.5.4 为内部版本，不列为公开发布。
 
-## 0.5.7 — Unreleased / 未发布
+## 0.5.7 — 2026-09-12
 
 - Added a confirmed “Restart Harness” button after plugin changes, with startup readiness checks; no need to close the client manually.
 - Enhanced connection checks with target-version mirror metadata and official integrity-digest comparison, distinguishing missing, inconsistent and unconfirmed metadata from connectivity failures.
