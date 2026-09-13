@@ -4,6 +4,12 @@ This log records client features, improvements, fixes and public releases. Inter
 
 本日志记录客户端新增功能、改进、修复和公开版本。0.5.3、0.5.4 为内部版本，不列为公开发布。
 
+## 0.5.8 — 2026-09-13
+
+- Fixed loopback links being handed to the external browser, including the IPv4 loopback range, the absolute localhost name and IPv4-mapped loopback addresses. Ordinary web links and exact-origin Harness navigation are unchanged.
+
+- 修复部分本机回环链接被误交给外部浏览器的问题，覆盖 IPv4 回环地址段、带末尾点的 localhost 和 IPv4 映射的回环地址；正常网页外链与 Harness 内部页面跳转保持不变。
+
 ## 0.5.7 — 2026-09-12
 
 - Added a confirmed “Restart Harness” button after plugin changes, with startup readiness checks; no need to close the client manually.
