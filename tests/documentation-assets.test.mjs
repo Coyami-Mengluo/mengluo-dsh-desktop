@@ -8,6 +8,15 @@ import { listSourceFiles } from '../scripts/source-files.mjs'
 const root = resolve(import.meta.dirname, '..')
 
 describe('reviewed documentation source', () => {
+  it('links release status from both README introductions without duplicating a stale version claim', () => {
+    for (const readme of ['README.md', 'README.zh.md']) {
+      const introduction = readFileSync(resolve(root, readme), 'utf8').split(/^## /mu)[0]
+      assert.doesNotMatch(introduction, /\b\d+\.\d+\.\d+\b|\bunreleased\b|未发布/iu, readme)
+      assert.ok(introduction.includes('](https://github.com/Coyami-Mengluo/mengluo-dsh-desktop/releases/latest)'), readme)
+      assert.ok(introduction.includes('](CHANGELOG.md)'), readme)
+    }
+  })
+
   it('includes release history and all reviewed screenshots in source exports and both READMEs', () => {
     assert.equal(Object.keys(DOCUMENTATION_ASSETS).length, 3)
     const files = listSourceFiles(root)

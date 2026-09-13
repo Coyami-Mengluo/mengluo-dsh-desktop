@@ -4,7 +4,7 @@ English | [中文](README.zh.md) | [Changelog](CHANGELOG.md)
 
 An unofficial, personal-maintainer Windows desktop client for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). This project is not affiliated with, sponsored by, or endorsed by DeepSeek. Harness provides the agent and its Web UI; this project provides installation, native windows, process supervision, and desktop integration.
 
-Development version: **0.5.7 (unreleased)**. The latest public installer remains **0.5.6**. See the [changelog](CHANGELOG.md) for changes and release history.
+For the latest public installer, see [GitHub Releases](https://github.com/Coyami-Mengluo/mengluo-dsh-desktop/releases/latest). See the [changelog](CHANGELOG.md) for changes and release history. Source changes may be newer than the latest installer.
 
 ## Install and use
 

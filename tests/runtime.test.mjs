@@ -119,6 +119,44 @@ describe('desktop window navigation', () => {
     assert.equal(classifyNavigation('javascript:alert(1)', origin), 'blocked')
     assert.equal(classifyNavigation('not a URL', origin), 'blocked')
   })
+
+  it('blocks normalized IPv4 loopback addresses outside the exact backend origin', () => {
+    for (const target of [
+      'http://127.0.0.0:9000/', 'http://127.0.0.2:9000/',
+      'https://127.2.3.4/', 'http://127.255.255.255/',
+      'http://127.2:9000/', 'http://2130706434:9000/',
+      'http://0x7f000002:9000/', 'http://0177.0.0.2:9000/',
+    ]) {
+      assert.equal(classifyNavigation(target, origin), 'blocked', target)
+      assert.equal(classifyNavigation(target, undefined), 'blocked', target)
+    }
+  })
+
+  it('blocks the absolute localhost name and IPv4-mapped loopback literals', () => {
+    for (const target of [
+      'http://localhost.:9000/', 'https://LOCALHOST.:47821/',
+      'http://[::ffff:127.0.0.1]:9000/', 'http://[::ffff:127.0.0.2]:9000/',
+      'http://[0:0:0:0:0:ffff:7f00:1]/', 'http://[::FFFF:7FFF:FFFF]/',
+      'http://[::ffff:7f00:0]/', 'http://[0:0:0:0:0:0:0:1]/',
+    ]) {
+      assert.equal(classifyNavigation(target, origin), 'blocked', target)
+      assert.equal(classifyNavigation(target, undefined), 'blocked', target)
+    }
+  })
+
+  it('preserves ordinary external hosts, non-loopback addresses and exact dynamic-port navigation', () => {
+    for (const target of [
+      'https://example.com/docs', 'http://127.0.0.2.example.com/',
+      'https://localhost.example.com/', 'https://notlocalhost/',
+      'http://126.255.255.255/', 'http://128.0.0.1/', 'http://192.168.1.10/',
+      'http://[::ffff:192.0.2.1]/', 'http://[2001:db8::1]/',
+    ]) assert.equal(classifyNavigation(target, origin), 'external', target)
+    const assignedOrigin = 'http://127.0.0.1:61997'
+    const target = `${assignedOrigin}/sessions/one?token=fixture-token#messages`
+    assert.equal(classifyNavigation(target, assignedOrigin), 'internal')
+    assert.equal(classifyNavigation(`${origin}/sessions/one`, assignedOrigin), 'blocked')
+    assert.equal(parseReadyUrl(`dsh web: ${target}`), target)
+  })
 })
 
 describe('desktop backend termination', () => {

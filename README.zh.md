@@ -4,7 +4,7 @@
 
 适用于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的非官方 Windows 桌面客户端，由个人维护。项目与 DeepSeek 无隶属、赞助或背书关系。智能体和 Web UI 由 Harness 提供，本项目负责安装、原生窗口、进程监管与桌面功能。
 
-开发版本：**0.5.7（未发布）**，最新公开安装包仍为 **0.5.6**。改动与公开版本历史见[更新日志](CHANGELOG.md)。
+最新公开安装包见 [GitHub Releases](https://github.com/Coyami-Mengluo/mengluo-dsh-desktop/releases/latest)，改动与公开版本历史见[更新日志](CHANGELOG.md)。源码中的改动可能尚未包含在最新安装包中。
 
 ## 安装与使用
 

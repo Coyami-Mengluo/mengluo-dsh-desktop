@@ -206,5 +206,10 @@ export function resolveWindowsTaskkillPath(environment = process.env) {
  * @returns {boolean} whether the hostname is a supported loopback literal/name.
  */
 function isLoopbackHost(hostname) {
-  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]'
+  // URL.hostname has already normalized IPv4 to dotted decimal and IPv6 to
+  // compressed lowercase hex. Match only loopback literals and the exact name;
+  // this is not a DNS lookup or an external-domain allowlist.
+  return hostname === 'localhost' || hostname === 'localhost.' || hostname === '[::1]'
+    || /^127(?:\.\d{1,3}){3}$/u.test(hostname)
+    || /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/u.test(hostname)
 }

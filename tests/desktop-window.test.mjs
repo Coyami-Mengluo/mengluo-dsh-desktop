@@ -174,6 +174,27 @@ describe('desktop shell and official WebContentsView composition', () => {
     world.controller.dispose()
   })
 
+  it('never forwards loopback popups to the browser while preserving ordinary external links', () => {
+    const world = fixture()
+    const official = world.controller.officialWebContents
+    try {
+      for (const url of [
+        'http://127.0.0.2:9000/', 'http://127.255.255.255/',
+        'http://2130706434:9000/', 'http://localhost.:9000/',
+        'http://[::ffff:127.0.0.1]:9000/', 'http://[::ffff:7fff:ffff]/',
+      ]) {
+        assert.equal(prevented(official, 'will-navigate', url), true)
+        assert.equal(prevented(official, 'will-redirect', url), true)
+        assert.deepEqual(official.openHandler({ url }), { action: 'deny' })
+        assert.deepEqual(world.externalUrls, [], url)
+      }
+      assert.equal(prevented(official, 'will-navigate', 'http://127.0.0.1:47821/session'), false)
+      const ordinaryLinks = ['https://example.com/docs', 'http://example.org/', 'https://localhost.example.com/']
+      for (const url of ordinaryLinks) assert.deepEqual(official.openHandler({ url }), { action: 'deny' })
+      assert.deepEqual(world.externalUrls, ordinaryLinks)
+    } finally { world.controller.dispose() }
+  })
+
   it('shows a native copy, paste, and selection menu targeted at the official renderer', () => {
     const world = fixture()
     const official = world.controller.officialWebContents
