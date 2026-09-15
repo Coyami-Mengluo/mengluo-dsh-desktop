@@ -4,7 +4,7 @@ This log records client features, improvements, fixes and public releases. Inter
 
 本日志记录客户端新增功能、改进、修复和公开版本。0.5.3、0.5.4 为内部版本，不列为公开发布。
 
-## Unreleased / 未发布
+## 0.5.10 — 2026-09-16
 
 - Changed plugin search to explicit submission with a Search button or Enter. Typing, clearing input and IME composition no longer trigger automatic searches.
 - Reduced repeated plugin requests: opening settings prefers cached results, identical in-flight requests share one network call, and repeated update checks reuse files pinned to the same commit while still checking the latest branch.
