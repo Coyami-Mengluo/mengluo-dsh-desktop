@@ -280,6 +280,15 @@ export class PluginManager {
     return catalog ? results[1] : results[0]
   }
 
+  /** Opening a settings window is a cache read, not a manual force-refresh. */
+  async load() {
+    if (this.disposed || this.busy) return { ok: false }
+    const [, result] = await Promise.all([
+      this.refreshInstalled(), this.searchCatalog(this.query),
+    ])
+    return result
+  }
+
   refreshInstalled({ checkFresh = false } = {}) {
     if (this.refreshPromise) return this.refreshPromise
     this.loading = true
@@ -415,6 +424,7 @@ export class PluginManager {
     if (request.type === 'plugins-snapshots') return this.busy ? { ok: false } : this.refreshSnapshots()
     if (request.type === 'plugin-restore') return this.restoreSnapshot(request.id)
     if (request.type === 'plugins-recover') return this.restoreSnapshot(undefined, { recover: true })
+    if (request.type === 'plugins-load') return this.load()
     if (request.type === 'plugins-refresh') return this.refresh()
     if (request.type === 'plugins-check') return this.refresh({ catalog: false, checkFresh: true })
     if (request.type === 'plugins-search') return this.searchCatalog(request.query)

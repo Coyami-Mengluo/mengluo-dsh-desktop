@@ -12,7 +12,6 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
   let pluginsRequested = false
   let snapshotsRequested = false
   let snapshotSignature
-  let pluginSearchTimer
   let pluginSearchComposing = false
   let pluginSearchEdited = false
   let pluginSearchRevision = 0
@@ -54,7 +53,7 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
     content.scrollTop = scrollPositions.get(section) ?? 0
     if (next === 'plugins' && !pluginsRequested) {
       pluginsRequested = true
-      void act({ type: 'plugins-refresh' })
+      void act({ type: 'plugins-load' })
     }
   }
   function renderVersions(state) {
@@ -148,7 +147,7 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
   const countdown = seconds => seconds >= 60 ? tr`${Math.floor(seconds / 60)}分${seconds % 60}秒` : tr`${seconds}秒`
   function acceptPluginCooldown(request, result) {
     const key = { search: 'searchUntil', metadata: 'metadataUntil', refresh: 'refreshUntil', check: 'checkUntil' }[result?.rateLimitScope]
-      ?? { 'plugins-search': 'searchUntil', 'plugins-more': 'searchUntil',
+      ?? { 'plugins-load': 'searchUntil', 'plugins-search': 'searchUntil', 'plugins-more': 'searchUntil',
       'plugins-refresh': 'refreshUntil', 'plugins-check': 'checkUntil',
       'plugin-install': 'metadataUntil', 'plugin-update': 'metadataUntil' }[request.type]
     if (!key || result?.ok !== false || result.rateLimited !== true || !pluginDeadline(result.retryAt)) return false
@@ -248,6 +247,10 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
     const searchReason = tr(plugins.rateLimits?.searchReason || '目录请求保护：请等待倒计时结束。')
     const metadataReason = tr(plugins.rateLimits?.metadataReason || '插件信息请求保护：请等待倒计时结束。')
     const manualReason = tr('客户端手动操作保护：两次操作至少间隔 30 秒。')
+    text('plugins-search-submit', catalogPending && !draftPending ? tr('正在搜索…') : tr('搜索'))
+    // During a server cooldown a manual search may still read cached results.
+    // The main process refuses any uncached network dispatch until recovery.
+    disable('plugins-search-submit', !api || queryInvalid || pluginSearchComposing || (catalogPending && !draftPending))
     text('plugins-refresh', refreshWait ? tr`刷新目录（${countdown(refreshWait)}）` : plugins.catalogLoading ? tr('正在搜索…') : tr('刷新目录'))
     disable('plugins-refresh', refreshWait || operationBusy || plugins.catalogLoading || plugins.loadingMore || draftPending || busyActions.has('plugins-refresh'))
     text('plugins-check', checkWait ? tr`检查更新（${countdown(checkWait)}）` : plugins.checking ? tr('正在检查…') : tr('检查更新'))
@@ -266,9 +269,9 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
     const retained = catalog.length && (draftPending || catalogPending || catalogQuery !== query || plugins.catalogError)
       ? tr` 当前保留${catalogLabel}的 ${catalog.length} 条结果。` : ''
     text('plugins-catalog-status', (queryInvalid ? tr('搜索词格式不支持或关键词过多，请缩短并使用文字、数字、空格或 . _ / -。')
-      : pluginSearchComposing ? tr('正在输入，选字完成后开始搜索…')
+      : pluginSearchComposing ? tr('正在输入，请选字完成后手动搜索。')
         : catalogPending ? tr`正在搜索${queryLabel}…`
-          : draftPending ? pluginSearchTimer ? tr('等待搜索新关键词…') : tr('关键词尚未搜索，请按 Enter 搜索。')
+          : draftPending ? tr('关键词尚未搜索，请点击“搜索”或按 Enter。')
             : plugins.catalogError || catalogQuery !== currentQuery ? tr('搜索未完成，可按 Enter 重试或手动刷新目录。')
               : catalog.length ? tr`${catalogLabel}：GitHub 匹配 ${total} 个，已加载 ${catalog.length} 个${plugins.loadingMore ? tr(' · 正在加载更多…') : ''}`
                 : plugins.page > 0 ? tr('没有匹配的插件，试试其他关键词。') : tr('暂无插件，请点击刷新目录。')) + retained)
@@ -521,8 +524,6 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
     finally { busyActions.delete(request.type); render(latest) }
   }
   async function searchPlugins() {
-    clearTimeout(pluginSearchTimer)
-    pluginSearchTimer = undefined
     if (!api || pluginSearchComposing) return
     const query = normalizedPluginQuery(byId('plugin-search').value)
     if (query === undefined) { render(latest); return }
@@ -545,14 +546,9 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
       render(latest)
     }
   }
-  function queuePluginSearch() {
+  function editPluginSearch() {
     pluginSearchEdited = true
     pluginSearchRevision += 1
-    clearTimeout(pluginSearchTimer)
-    pluginSearchTimer = undefined
-    if (!pluginSearchComposing && normalizedPluginQuery(byId('plugin-search').value) !== undefined) {
-      pluginSearchTimer = setTimeout(() => { void searchPlugins() }, 500)
-    }
     render(latest)
   }
   for (const tab of tabs) {
@@ -568,6 +564,10 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
   document.addEventListener('click', event => {
     const button = event.target.closest('button[data-action]')
     if (!button || button.disabled) return
+    if (button.dataset.action === 'plugins-search') {
+      void searchPlugins()
+      return
+    }
     if (button.dataset.action === 'plugins-more') {
       const query = normalizedPluginQuery(byId('plugin-search').value)
       if (query !== undefined && query === (latest.plugins?.query ?? '')) void act({ type: 'plugins-more', query })
@@ -594,23 +594,22 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
         : (index + (event.key === 'ArrowRight' ? 1 : -1) + names.length) % names.length], true)
     })
   }
-  byId('plugin-search').addEventListener('input', queuePluginSearch)
+  byId('plugin-search').addEventListener('input', editPluginSearch)
   byId('plugin-search').addEventListener('compositionstart', () => {
     pluginSearchComposing = true
-    queuePluginSearch()
+    editPluginSearch()
   })
   byId('plugin-search').addEventListener('compositionend', () => {
     pluginSearchComposing = false
-    queuePluginSearch()
+    editPluginSearch()
   })
   byId('plugin-search').addEventListener('keydown', event => {
-    if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229 || pluginSearchComposing) return
+    if (event.key !== 'Enter' || event.repeat || event.isComposing || event.keyCode === 229 || pluginSearchComposing) return
     event.preventDefault()
     void searchPlugins()
   })
   window.addEventListener('beforeunload', () => {
     unloading = true
-    clearTimeout(pluginSearchTimer)
     clearInterval(pluginCooldownTimer)
     clearTimeout(runtimeRefreshTimer)
     pluginCooldownTimer = undefined

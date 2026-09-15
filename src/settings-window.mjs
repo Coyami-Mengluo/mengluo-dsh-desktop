@@ -15,7 +15,7 @@ const SIMPLE_ACTIONS = new Set([
   'harness-check', 'harness-setup', 'harness-download', 'harness-restart', 'harness-progress',
   'terminal', 'client-check', 'client-download', 'client-install', 'client-progress',
   'open-log', 'open-repository', 'open-official', 'open-client-releases', 'test-connection',
-  'plugins-refresh', 'plugins-check', 'plugins-snapshots', 'plugins-recover', 'plugins-restart',
+  'plugins-load', 'plugins-refresh', 'plugins-check', 'plugins-snapshots', 'plugins-recover', 'plugins-restart',
   'harness-versions-refresh', 'harness-versions-backups',
 ])
 const PLUGIN_ACTIONS = new Set(['plugin-install', 'plugin-update', 'plugin-remove', 'plugin-source'])
@@ -84,13 +84,13 @@ export function validateSettingsAction(request) {
 }
 
 const failure = () => ({ ok: false, message: '操作未完成，请重试或查看日志。' })
-const pluginRequestActions = new Set(['plugins-search', 'plugins-more', 'plugins-refresh', 'plugins-check', 'plugin-install', 'plugin-update'])
+const pluginRequestActions = new Set(['plugins-load', 'plugins-search', 'plugins-more', 'plugins-refresh', 'plugins-check', 'plugin-install', 'plugin-update'])
 const safeDeadline = value => Number.isSafeInteger(value) && value > 0 && value <= 8.64e15 ? value : 0
 const cooldownFailure = (request, result) => pluginRequestActions.has(request.type)
   && (result?.rateLimited === true || result?.code === 'PLUGIN_RATE_LIMIT') && safeDeadline(result.retryAt)
   ? { ok: false, rateLimited: true, retryAt: result.retryAt,
     rateLimitScope: ['search', 'metadata', 'refresh', 'check'].includes(result.rateLimitScope) ? result.rateLimitScope
-      : ({ 'plugins-refresh': 'refresh', 'plugins-check': 'check', 'plugins-search': 'search', 'plugins-more': 'search' }[request.type] ?? 'metadata'),
+      : ({ 'plugins-load': 'search', 'plugins-refresh': 'refresh', 'plugins-check': 'check', 'plugins-search': 'search', 'plugins-more': 'search' }[request.type] ?? 'metadata'),
     message: '插件请求冷却中，请等待倒计时结束后重试。' } : undefined
 const safeCatalogMessages = new Set([
   '搜索请求已暂停，已有结果已保留。请等待倒计时结束后重试。',

@@ -11,7 +11,7 @@ describe('settings action contract', () => {
     for (const type of ['harness-check', 'harness-setup', 'harness-download', 'harness-restart', 'harness-progress',
       'terminal', 'client-check', 'client-download', 'client-install', 'client-progress',
       'open-log', 'open-repository', 'open-official', 'open-client-releases', 'test-connection',
-      'plugins-refresh', 'plugins-check', 'plugins-snapshots', 'plugins-recover', 'plugins-restart']) {
+      'plugins-load', 'plugins-refresh', 'plugins-check', 'plugins-snapshots', 'plugins-recover', 'plugins-restart']) {
       assert.equal(validateSettingsAction({ type }), true, type)
       assert.equal(validateSettingsAction({ type, url: 'https://untrusted.invalid' }), false, type)
     }
@@ -223,12 +223,12 @@ describe('isolated client settings window', () => {
     const world = fixture({ onAction: () => reply })
     world.controller.show('plugins')
     await tick()
-    for (const request of [{ type: 'plugins-refresh' }, { type: 'plugins-check' },
+    for (const request of [{ type: 'plugins-load' }, { type: 'plugins-refresh' }, { type: 'plugins-check' },
       { type: 'plugins-search', query: '主题' }, { type: 'plugins-more', query: '' },
       { type: 'plugin-install', id: 'npm:theme' }, { type: 'plugin-update', id: 'npm:theme' }]) {
       assert.deepEqual(await world.invoke(world.trustedEvent(), request), {
         ok: false, rateLimited: true, retryAt,
-        rateLimitScope: ({ 'plugins-refresh': 'refresh', 'plugins-check': 'check', 'plugins-search': 'search', 'plugins-more': 'search' }[request.type] ?? 'metadata'),
+        rateLimitScope: ({ 'plugins-load': 'search', 'plugins-refresh': 'refresh', 'plugins-check': 'check', 'plugins-search': 'search', 'plugins-more': 'search' }[request.type] ?? 'metadata'),
         message: '插件请求冷却中，请等待倒计时结束后重试。',
       })
     }

@@ -4,11 +4,46 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, it } from 'node:test'
 import { PluginManager } from '../src/plugin-manager.mjs'
+import { PluginCatalog } from '../src/plugin-catalog.mjs'
 
 const worlds = []
 afterEach(() => { for (const world of worlds.splice(0)) { world.manager.dispose(); rmSync(world.root, { recursive: true, force: true }) } })
 
 describe('plugin manager: detection is never an installation', () => {
+  it('opens cached plugin pages without force-refreshing or spending a manual refresh cooldown', async () => {
+    const world = fixture()
+    const calls = []
+    world.items.push({ ...plugin(), github: { ...plugin().github, ref: 'main' } })
+    world.manager.catalog = new PluginCatalog({ now: () => world.now, fetch: async url => {
+      calls.push(url)
+      if (url.includes('/search/')) return Response.json({ items: [], total_count: 0 })
+      if (url.includes('/commits/')) return Response.json({ sha: 'b'.repeat(40) })
+      if (url.includes('/contents/package.json')) {
+        const content = Buffer.from(JSON.stringify({ name: 'example-plugin', version: '1.1.0', dsh: { bundle: { patch: 'cordis.patch.yml' } } }))
+        return Response.json({ type: 'file', path: 'package.json', encoding: 'base64', size: content.length, content: content.toString('base64') })
+      }
+      return Response.json({ type: 'file', path: 'cordis.patch.yml' })
+    } })
+    for (let index = 0; index < 20; index++) {
+      assert.equal((await world.manager.handleAction({ type: 'plugins-load' })).ok, true)
+      world.now += 1000
+    }
+    assert.equal(calls.length, 4, '20 page opens share one directory GET and one initial three-GET update check')
+    assert.equal(world.manager.getState().rateLimits.refreshUntil, 0)
+    assert.equal(world.manager.getState().installed[0].updateAvailable, true)
+    await world.manager.handleAction({ type: 'plugins-check' })
+    assert.equal(calls.length, 5, 'manual check revalidates just the branch when the candidate SHA is unchanged')
+    await world.manager.handleAction({ type: 'plugins-refresh' })
+    assert.equal(calls.length, 6, 'manual directory refresh still reaches the network')
+    assert.equal((await world.manager.handleAction({ type: 'plugins-load' })).ok, true)
+    assert.equal(calls.length, 6, 'cached page opens work even during the search dispatch cooldown')
+    world.now += 15 * 60_000
+    await world.manager.handleAction({ type: 'plugins-load' })
+    assert.equal(calls.length, 8, 'expired directory and branch caches refresh; SHA-pinned files remain reusable')
+    assert.equal(world.operations.length, 0)
+    assert.equal(world.confirmations.length, 0)
+  })
+
   it('only reads when browsing or checking, exposes manual updates, and handles differing repository/package names', async () => {
     const world = fixture()
     world.items.push(plugin())

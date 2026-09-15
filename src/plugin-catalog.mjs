@@ -12,6 +12,9 @@ const MAX_JSON_BYTES = 2 * 1024 * 1024
 const MAX_MANIFEST_BYTES = 256 * 1024
 const MAX_ERROR_BYTES = 16 * 1024
 const CACHE_ENTRIES = 256
+const CACHE_BYTES = 8 * 1024 * 1024
+const METADATA_CACHE_TTL = 15 * 60_000
+const IMMUTABLE_CACHE_TTL = 24 * 60 * 60_000
 const SHA = /^[a-f0-9]{40}$/iu
 const NPM_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u
 
@@ -37,13 +40,17 @@ export function normalizePluginSearchQuery(value = '') {
 
 /** Read-only, credential-free metadata client. Inject Electron net.fetch to use the system proxy. */
 export class PluginCatalog {
-  constructor({ fetch, now = Date.now, timeoutMs = 15_000, cacheTtlMs = 5 * 60_000 } = {}) {
+  constructor({ fetch, now = Date.now, timeoutMs = 15_000, cacheTtlMs = 5 * 60_000,
+    metadataCacheTtlMs = METADATA_CACHE_TTL } = {}) {
     if (typeof fetch !== 'function') throw new TypeError('plugin catalog requires a fetch function')
     this.fetch = fetch
     this.now = now
     this.timeoutMs = Math.max(1, Math.min(60_000, Number(timeoutMs) || 15_000))
     this.cacheTtlMs = Math.max(0, Math.min(60 * 60_000, Number(cacheTtlMs) || 0))
+    this.metadataCacheTtlMs = Math.max(0, Math.min(60 * 60_000, Number(metadataCacheTtlMs) || 0))
     this.cache = new Map()
+    this.cacheBytes = 0
+    this.inflight = new Map()
     this.rateLimiter = new PluginRateLimiter({ now })
     this.requests = new Set()
     this.disposed = false
@@ -175,13 +182,65 @@ export class PluginCatalog {
     if (![API, REGISTRY].includes(parsed.origin) || parsed.username || parsed.password || parsed.hash) {
       throw new Error('插件元数据地址不受支持。')
     }
-    const cached = this.cache.get(url)
-    if (!refresh && cached && this.now() - cached.at < this.cacheTtlMs) return structuredClone(cached.value)
-    this.rateLimiter.dispatch(parsed)
-    const controller = new AbortController()
+    const key = parsed.href
+    // Only exact-commit files are immutable. Branches, tags, repository metadata
+    // and npm's latest version must still be checked on an explicit refresh.
+    const immutable = parsed.origin === API && /^\/repos\/[^/]+\/[^/]+\/contents\/.+/u.test(parsed.pathname)
+      && parsed.searchParams.size === 1 && SHA.test(parsed.searchParams.get('ref') ?? '')
+    const ttl = immutable ? IMMUTABLE_CACHE_TTL : parsed.pathname.startsWith('/search/')
+      ? this.cacheTtlMs : this.metadataCacheTtlMs
+    const cached = this.cache.get(key)
+    if ((!refresh || immutable) && cached && this.now() >= cached.at && this.now() - cached.at < ttl) {
+      this.cache.delete(key)
+      this.cache.set(key, cached)
+      return structuredClone(cached.value)
+    }
+    let pending = this.inflight.get(key)
+    if (!pending) {
+      this.rateLimiter.dispatch(parsed)
+      pending = { controller: new AbortController(), consumers: new Set(), settled: false }
+      this.inflight.set(key, pending)
+      pending.promise = this.fetchJson(parsed, pending.controller).finally(() => {
+        pending.settled = true
+        if (this.inflight.get(key) === pending) this.inflight.delete(key)
+      })
+    }
+    return this.joinRequest(key, pending, signal)
+  }
+
+  /** A cancelled search must not cancel another caller sharing the same GET. */
+  joinRequest(key, pending, signal) {
+    return new Promise((resolve, reject) => {
+      const consumer = {}
+      let done = false
+      pending.consumers.add(consumer)
+      const finish = (ok, value) => {
+        if (done) return
+        done = true
+        signal?.removeEventListener('abort', cancel)
+        pending.consumers.delete(consumer)
+        if (ok) resolve(structuredClone(value))
+        else reject(value)
+      }
+      const cancel = () => {
+        finish(false, signal.reason ?? new Error('插件请求已取消。'))
+        if (!pending.settled && !pending.consumers.size) {
+          if (this.inflight.get(key) === pending) this.inflight.delete(key)
+          pending.controller.abort(signal.reason)
+        }
+      }
+      // Attach both handlers even if this consumer was cancelled synchronously.
+      pending.promise.then(value => finish(true, value), error => finish(false, error))
+      signal?.addEventListener('abort', cancel, { once: true })
+      if (signal?.aborted) cancel()
+    })
+  }
+
+  async fetchJson(parsed, controller) {
+    const url = parsed.href
     this.requests.add(controller)
     const timer = setTimeout(() => controller.abort(new Error('插件元数据请求超时。')), this.timeoutMs)
-    const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
+    const combined = controller.signal
     try {
       const response = await this.fetch(url, {
         method: 'GET', redirect: 'error', credentials: 'omit', signal: combined,
@@ -211,13 +270,26 @@ export class PluginCatalog {
       this.rateLimiter.observe(parsed, response)
       const value = await readJson(response, MAX_JSON_BYTES, combined)
       this.assertActive(combined)
-      if (this.cache.size >= CACHE_ENTRIES) this.cache.delete(this.cache.keys().next().value)
-      this.cache.set(url, { at: this.now(), value: structuredClone(value) })
+      this.remember(url, value)
       return value
     } finally {
       clearTimeout(timer)
       this.requests.delete(controller)
     }
+  }
+
+  remember(url, value) {
+    const bytes = Buffer.byteLength(JSON.stringify(value))
+    const previous = this.cache.get(url)
+    if (previous) { this.cache.delete(url); this.cacheBytes -= previous.bytes }
+    while (this.cache.size && (this.cache.size >= CACHE_ENTRIES || this.cacheBytes + bytes > CACHE_BYTES)) {
+      const oldest = this.cache.keys().next().value
+      this.cacheBytes -= this.cache.get(oldest).bytes
+      this.cache.delete(oldest)
+    }
+    if (bytes > CACHE_BYTES) return
+    this.cache.set(url, { at: this.now(), bytes, value: structuredClone(value) })
+    this.cacheBytes += bytes
   }
 
   assertActive(signal) {
@@ -233,7 +305,9 @@ export class PluginCatalog {
     this.disposed = true
     for (const controller of this.requests) controller.abort(new Error('插件目录已关闭。'))
     this.requests.clear()
+    this.inflight.clear()
     this.cache.clear()
+    this.cacheBytes = 0
     this.rateLimiter.dispose()
   }
 }

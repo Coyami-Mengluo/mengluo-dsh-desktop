@@ -4,6 +4,16 @@ This log records client features, improvements, fixes and public releases. Inter
 
 本日志记录客户端新增功能、改进、修复和公开版本。0.5.3、0.5.4 为内部版本，不列为公开发布。
 
+## Unreleased / 未发布
+
+- Changed plugin search to explicit submission with a Search button or Enter. Typing, clearing input and IME composition no longer trigger automatic searches.
+- Reduced repeated plugin requests: opening settings prefers cached results, identical in-flight requests share one network call, and repeated update checks reuse files pinned to the same commit while still checking the latest branch.
+- Extended browsing metadata caches to 15 minutes and exact-commit file caches to 24 hours within the current client session, with bounded least-recently-used storage. Manual version checks, installation confirmation and server rate limits remain enforced.
+
+- 插件搜索改为点击“搜索”按钮或按 Enter 后提交，输入、清空文本和输入法选字不再自动触发搜索。
+- 减少插件重复请求：打开设置优先使用缓存，相同的进行中请求合并发送；重复检查更新复用同一提交的文件，仍查询最新分支。
+- 普通浏览的插件信息缓存延长至 15 分钟，精确提交文件在当前客户端进程内缓存最长 24 小时，并限制缓存容量、淘汰最久未使用的条目。保留手动版本检查、安装确认及服务端限流保护。
+
 ## 0.5.9 — 2026-09-15
 
 - Added Harness version management: retrieve official historical releases, install independent runtime slots, and verify installed versions offline before a confirmed restart switches versions.
