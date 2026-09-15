@@ -19,6 +19,7 @@ export class DesktopSettingsController {
   isHarnessBusy() {
     const harness = this.options.harness
     return harness.installPromise !== undefined || harness.preparingVersion !== undefined || this.options.isStarting?.() === true
+      || this.options.versions?.isBusy() === true || Boolean(this.options.versions?.catalogPromise)
       || (this.options.plugins?.blocksUpdates?.() ?? this.options.plugins?.isBusy()) === true
   }
 
@@ -36,6 +37,7 @@ export class DesktopSettingsController {
       harness: this.options.harness.getSettingsState(),
       client: this.options.client.getSettingsState(),
       plugins: this.options.plugins?.getState(),
+      versions: this.options.versions?.getState(),
       network: { ...this.getDownloadState(), proxyStatus: this.proxyStatus, probe: this.probe, activity: this.activity },
       about: {
         productName: this.options.productName, clientVersion: this.options.client.options.version,
@@ -135,6 +137,12 @@ export class DesktopSettingsController {
     if (this.disposed || !validateSettingsAction(request)) return { ok: false, message: '不支持此设置操作。' }
     const { harness, client } = this.options
     try {
+      if (request.type.startsWith('harness-version')) {
+        if (!this.options.versions) throw new Error('Runtime version manager is unavailable')
+        await this.options.versions.handleAction(request)
+        this.refresh()
+        return { ok: true }
+      }
       if (request.type.startsWith('plugin-') || request.type.startsWith('plugins-')) {
         return this.options.plugins ? await this.options.plugins.handleAction(request) : { ok: false, message: '插件管理尚未就绪。' }
       }
@@ -157,7 +165,7 @@ export class DesktopSettingsController {
           this.options.showSetup()
           break
         case 'harness-download':
-          if (this.isHarnessBusy() || !harness.availableRelease) throw new Error('no candidate')
+          if (this.isHarnessBusy() || harness.state.versionLocked || !harness.availableRelease) throw new Error('no candidate')
           harness.prepareRelease(harness.availableRelease, { reportFailure: true })
           break
         case 'harness-restart':

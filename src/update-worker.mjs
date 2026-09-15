@@ -1,5 +1,6 @@
 import { installOfficialRuntime } from './runtime-installer.mjs'
 import { smokeOfficialRuntime } from './runtime-smoke.mjs'
+import { readManagedRuntime } from './runtime-store.mjs'
 
 const controller = new AbortController()
 let started = false
@@ -10,14 +11,25 @@ process.on('message', message => {
     controller.abort()
     return
   }
-  if (started || message === null || typeof message !== 'object' || message.type !== 'install') return
+  if (started || message === null || typeof message !== 'object' || !['install', 'verify'].includes(message.type)) return
   started = true
   void install(message)
 })
 
 async function install(message) {
   try {
-    await installOfficialRuntime({
+    if (message.type === 'verify') {
+      // Verification is offline and read-only: never quarantine or reinstall an existing slot.
+      const candidate = readManagedRuntime(message.userData, message.release.version)
+      if (!candidate) throw new Error('Installed Harness did not pass its integrity seal')
+      send({ type: 'progress', stage: 'smoke' })
+      await smokeOfficialRuntime({
+        executable: candidate.nodePath, version: candidate.version, root: candidate.root,
+        cliPath: candidate.cliPath, runnerPath: message.runnerPath,
+        fetchPage: (url, init) => fetch(url, init), signal: controller.signal,
+        log: text => { send({ type: 'log', text }) },
+      })
+    } else await installOfficialRuntime({
       userData: message.userData,
       release: message.release,
       npm: message.npm,

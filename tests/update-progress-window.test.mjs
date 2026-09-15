@@ -12,6 +12,14 @@ import {
 import { formatUpdateTiming } from '../assets/update-progress-timing.js'
 
 describe('native update progress window', () => {
+  it('distinguishes an installed historical slot from a scheduled update', () => {
+    const world = fixture()
+    world.controller.complete('1.0.0', true)
+    assert.equal(world.controller.state.percent, 100)
+    assert.match(world.controller.state.detail, /尚未切换/u)
+    world.controller.dispose()
+  })
+
   it('shows without focus, hides instead of cancelling, follows theme, and disposes', async () => {
     const world = fixture({ now: () => 1_000 })
     world.controller.begin('0.1.0-rc.6')

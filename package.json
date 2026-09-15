@@ -1,6 +1,6 @@
 {
   "name": "mengluo-dsh-desktop",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "description": "An unofficial Windows desktop client for DeepSeek Harness",
   "license": "MIT",
   "author": "MengLuo DSH Desktop contributors",
@@ -23,6 +23,7 @@
     "smoke:settings": "node scripts/smoke-settings.mjs",
     "smoke:settings:packaged": "node scripts/smoke-settings.mjs --packaged",
     "smoke:main": "node scripts/smoke-main.mjs",
+    "smoke:versions": "node scripts/smoke-versions.mjs",
     "smoke:main:packaged": "node scripts/smoke-main.mjs --packaged",
     "smoke:client-update": "node scripts/smoke-client-update.mjs",
     "smoke:client-update:packaged": "node scripts/smoke-client-update.mjs --packaged",

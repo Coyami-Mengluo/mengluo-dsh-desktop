@@ -31,6 +31,7 @@ export function defaultRuntimeState() {
   return {
     schema: STATE_SCHEMA,
     autoCheck: true,
+    versionLocked: false,
     interval: '24h',
     channel: undefined,
     lastCheckedAt: undefined,
@@ -74,6 +75,7 @@ export function normalizeRuntimeState(value) {
   return {
     schema: STATE_SCHEMA,
     autoCheck: source.autoCheck !== false,
+    versionLocked: source.versionLocked === true,
     interval: normalizeUpdateInterval(source.interval),
     channel,
     lastCheckedAt: finiteTimestamp(source.lastCheckedAt),

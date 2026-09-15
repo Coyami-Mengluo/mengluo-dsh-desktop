@@ -87,6 +87,16 @@ Snapshots do not restore Harness runtime files, conversations, workspaces, other
 
 Client installers replace application files, not the per-user Harness runtime slots, plugins or conversations. A confirmed client restart stops current Harness tasks; finish them first. Existing private-client profiles and workspaces are reused when no new profile exists. Upstream Harness can change its own data formats; this project cannot guarantee compatibility with every future release or migrate undocumented formats.
 
+## Harness version management
+
+In **Client settings → Harness → Version management**, choose an installed version or fetch previous official releases (30-second refresh cooldown). Downloads use your selected source and install into independent slots without scheduling a switch. Switching an installed version works offline: file integrity and startup with temporary data must pass before the client stops its backend and restarts. Each slot keeps its own Node and matching official dependencies; arbitrary paths and package URLs are not accepted.
+
+A manual switch pins the chosen version. While pinned, automatic checks only notify; no update is downloaded or scheduled. Enabling the pin also clears an already-pending switch. Unpin to resume the normal update policy.
+
+Before a **downgrade**, finish all tasks and close other Harness instances and terminals. The client stops its backend, copies and verifies the entire Harness home plus its plugin-source record, then schedules the switch. Backups are local, unencrypted, and may contain keys and conversations. They live in `harness-data-backups` under the client profile; the settings button opens that folder. Only a directory with `manifest.json` is a completed, verified backup. Limits are 2 GiB / 100000 entries; unsafe paths, links outside the data directory, changing files, or backup failures block the downgrade. Backups are not automatically pruned or uploaded. Workspace files outside Harness home are not included.
+
+Older versions may not understand newer data or plugins. A failed startup can fall back to a usable installed runtime, but **does not automatically restore data from a backup**. Full-data restore is intentionally manual: exit all Harness processes, keep the current data as a separate copy, and inspect the backup manifest before restoring. This is not a guarantee of compatibility with every official release.
+
 ## Build from source
 
 Use **Windows x64 and Node.js 24.19.0**. No official Harness source checkout or pnpm workspace is needed.

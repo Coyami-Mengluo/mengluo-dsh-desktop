@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { createWriteStream, existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, dialog as nativeDialog, ipcMain, Menu as nativeMenu, nativeTheme, net, Notification as NativeNotification, shell, Tray, WebContentsView } from 'electron'
+import { app, BrowserWindow, dialog as nativeDialog, ipcMain, Menu as nativeMenu, nativeTheme, net, Notification as NativeNotification, screen, shell, Tray, WebContentsView } from 'electron'
 import { createLanguageController, localizeMenu, localizeMessageOptions } from './language.mjs'
 import {
   BACKEND_TREE_KILL_DELAY_MS,
@@ -40,6 +40,8 @@ import { PluginCatalog } from './plugin-catalog.mjs'
 import { PluginManager } from './plugin-manager.mjs'
 import { resolvePluginHome } from './plugin-runtime.mjs'
 import { createBackendReadiness } from './backend-readiness.mjs'
+import { RuntimeVersionManager } from './runtime-versions.mjs'
+import { createHarnessDataBackup } from './plugin-snapshots.mjs'
 
 const APP_ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const LEGACY_PRODUCT_NAME = 'MengLuo AI'
@@ -79,6 +81,7 @@ let installClientAfterShutdown
 let settingsWindow
 let settingsController
 let pluginManager
+let runtimeVersions
 let pluginQuitNotice
 let pluginRecoveryExitApproved = false
 let pluginBackendPaused = false
@@ -192,6 +195,7 @@ async function startApplication() {
     log: text => { appendLog('tray', text) },
   })
   updateProgressWindow = createUpdateProgressWindow({
+    screen,
     language,
     BrowserWindow,
     ipcMain,
@@ -226,6 +230,7 @@ async function startApplication() {
     onSettingsRequested: section => { showClientSettings(section) },
     onSettingsChanged: () => { settingsController?.refresh() },
     isPluginBusy: () => pluginManager?.blocksUpdates() === true,
+    isVersionBusy: () => runtimeVersions?.isBusy() === true || Boolean(runtimeVersions?.catalogPromise),
     getDownloadSource: () => settingsController?.preferences.source ?? 'official',
     onDownloadStatus: status => { settingsController?.reportDownloadStatus(status) },
     hasClientProgress: () => ['downloading', 'downloaded', 'installing', 'error'].includes(shellUpdateManager?.state.status),
@@ -235,12 +240,13 @@ async function startApplication() {
       else updateManager?.reportProgress('show')
     },
     requestRestart: () => {
-      if (quitStarted || pluginManager?.blocksUpdates()) return
+      if (quitStarted || runtimeVersions?.isBusy() || pluginManager?.blocksUpdates()) return
       app.relaunch()
       app.quit()
     },
   })
   const shellProgress = createShellUpdateWindow({
+    screen,
     language,
     BrowserWindow, ipcMain, nativeTheme, getParent: () => mainWindow,
     iconPath: join(APP_ROOT, 'assets', 'icon.png'),
@@ -262,13 +268,13 @@ async function startApplication() {
     log: text => { appendLog('client-update', text) },
     openExternal: openExternalUrl,
     showMessage: options => mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options),
-    isHarnessInstalling: () => updateManager?.installPromise !== undefined || pluginManager?.blocksUpdates() === true,
+    isHarnessInstalling: () => updateManager?.installPromise !== undefined || runtimeVersions?.isBusy() === true || pluginManager?.blocksUpdates() === true,
     onInstallError: error => {
       dialog.showErrorBox('客户端更新未安装', `安装程序未能启动，请重新打开客户端后重试。\n\n${String(error)}`)
       app.quit()
     },
     requestInstall: install => {
-      if (quitStarted || updateManager?.installPromise !== undefined || pluginManager?.blocksUpdates()) return false
+      if (quitStarted || runtimeVersions?.isBusy() || updateManager?.installPromise !== undefined || pluginManager?.blocksUpdates()) return false
       installClientAfterShutdown = install
       app.quit()
       return true
@@ -279,7 +285,7 @@ async function startApplication() {
     dshHome: resolvePluginHome({ workspacePath }),
     catalog: new PluginCatalog({ fetch: (url, options) => net.fetch(url, options) }),
     getRuntime: () => updateManager.currentRuntime,
-    isBlocked: () => quitStarted || pluginBackendPaused || startupFailureHandling || updateManager.installPromise !== undefined
+    isBlocked: () => quitStarted || pluginBackendPaused || runtimeVersions?.isBusy() || startupFailureHandling || updateManager.installPromise !== undefined
       || updateManager.preparingVersion !== undefined || shellUpdateManager.state.status === 'installing'
       || (backend !== undefined && backendOrigin === undefined && !hasExited(backend)),
     npmCliPath: updaterNpmCliPath, terminalBinPath, workspacePath,
@@ -295,9 +301,34 @@ async function startApplication() {
     onChanged: () => { updateManager.rebuildMenu() },
     log: text => { appendLog('plugins', redactHarnessTokens(text)) },
   })
+  runtimeVersions = new RuntimeVersionManager({
+    updater: updateManager,
+    isBlocked: () => quitStarted || pluginBackendPaused || startupFailureHandling || pluginManager.blocksUpdates()
+      || shellUpdateManager.state.status === 'installing' || !backendOrigin,
+    withBackendStopped: withPluginBackendStopped,
+    showMessage: options => settingsWindow?.window && !settingsWindow.window.isDestroyed()
+      ? dialog.showMessageBox(settingsWindow.window, options) : dialog.showMessageBox(mainWindow, options),
+    backup: options => createHarnessDataBackup({ ...options, userData: app.getPath('userData'), dshHome: resolvePluginHome({ workspacePath }) }),
+    openBackupFolder: async () => {
+      const directory = join(app.getPath('userData'), 'harness-data-backups')
+      mkdirSync(directory, { recursive: true })
+      const error = await shell.openPath(directory)
+      if (error) throw new Error(error)
+    },
+    requestRestart: () => {
+      if (quitStarted || !runtimeVersions.committed || pluginManager.blocksUpdates()) return false
+      runtimeState = updateManager.state
+      app.relaunch()
+      app.quit()
+      return quitStarted
+    },
+    onChanged: () => { settingsController?.refresh(); updateManager.rebuildMenu() },
+    log: text => { appendLog('versions', redactHarnessTokens(text)) },
+  })
   settingsController = new DesktopSettingsController({
     userData: app.getPath('userData'), harness: updateManager, client: shellUpdateManager,
     plugins: pluginManager,
+    versions: runtimeVersions,
     productName: PRODUCT_NAME, app, net,
     isStarting: () => backend !== undefined && backendOrigin === undefined && !hasExited(backend),
     onChanged: state => {
@@ -317,6 +348,7 @@ async function startApplication() {
     log: text => { appendLog('settings', text) },
   })
   settingsWindow = createSettingsWindow({
+    screen,
     language,
     BrowserWindow, ipcMain, nativeTheme, getParent: () => mainWindow,
     productName: PRODUCT_NAME, iconPath: join(APP_ROOT, 'assets', 'icon.png'),
@@ -345,6 +377,7 @@ async function startApplication() {
     },
   })
   await pluginManager.refreshSnapshots()
+  await runtimeVersions.refreshLocal().catch(error => { appendLog('versions', `local version listing failed: ${String(error)}\n`) })
   updateManager.start()
   shellUpdateManager.start()
   settingsController.refresh()
@@ -360,6 +393,9 @@ function showClientSettings(section = 'harness') {
   settingsController?.refresh()
   settingsWindow?.show(section)
   void settingsController?.inspectProxy()
+  if (section === 'harness' && !runtimeVersions?.isBusy()) void runtimeVersions?.refreshLocal().catch(error => {
+    appendLog('versions', `local version listing failed: ${String(error)}\n`)
+  })
 }
 
 /**
@@ -808,6 +844,16 @@ app.on('before-quit', (event) => {
   if (mayQuit) return
   event.preventDefault()
   if (quitStarted) return
+  if (runtimeVersions?.isBusy() && !runtimeVersions.committed) {
+    showClientSettings('harness')
+    if (!pluginQuitNotice) {
+      pluginQuitNotice = dialog.showMessageBox({ type: 'info', title: '版本操作尚未结束',
+        message: '请等待版本校验或数据备份结束后再退出',
+        detail: '仍可关闭主窗口留在托盘；请勿同时在外部终端操作 Harness 数据。',
+      }).catch(() => {}).finally(() => { pluginQuitNotice = undefined })
+    }
+    return
+  }
   if (pluginManager?.recoveryRequired && !pluginRecoveryExitApproved) {
     if (!pluginQuitNotice) {
       pluginQuitNotice = dialog.showMessageBox({ type: 'warning', title: '插件进程需要检查',
@@ -833,6 +879,7 @@ app.on('before-quit', (event) => {
     return
   }
   quitStarted = true
+  runtimeVersions?.dispose()
   pluginManager?.dispose()
   settingsController?.dispose()
   settingsWindow?.dispose()

@@ -25,6 +25,12 @@
 
 ## 3. 两条互不替换的更新路径
 
+[runtime-versions.mjs](../src/runtime-versions.mjs) 提供用户主动选择的历史版本安装与离线切换。设置 IPC 只接受固定动作和严格版本号；下载目标须存在于官方目录，已安装版本须经独立 worker 校验封印与隔离启动。手动安装只准备槽位，不登记待切换；确认切换后才写入 `pendingVersion` 并重启。切换自动设置 `versionLocked`，锁定期间自动检查仅提醒。与插件修改、普通 Harness 更新及客户端安装互斥。
+
+降级先暂停后台，再通过 [plugin-snapshots.mjs](../src/plugin-snapshots.mjs) 的受限字节复制器备份整个 Harness home 及客户端插件来源记录。此备份与插件快照保留/回滚系统分离，不自动删除、恢复或上传；只有校验完整副本和源数据均未变化后，才写入完成清单。上限 2 GiB / 100000 项，外部链接和不安全路径拒绝。失败不会登记版本切换。启动失败的运行时回退不等同于恢复官方数据格式，具体风险见 README。
+
+独立壳窗口共用 [window-placement.mjs](../src/window-placement.mjs)，在首次显示或从隐藏恢复时相对主窗口居中，并限制在主窗口所在显示器的工作区。可见窗口不重新定位，保留用户拖动位置。
+
 | 路径 | 来源与校验 | 下载和启用 |
 | --- | --- | --- |
 | 官方 Harness | 官方 npm 的版本、精确依赖图、完整性信息；独立 Node 与官方配套依赖 | [update-manager.mjs](../src/update-manager.mjs) 可自动检查并准备候选；通过隔离测试后等待确认重启切换 |

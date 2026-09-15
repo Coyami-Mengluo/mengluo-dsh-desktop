@@ -15,6 +15,25 @@ afterEach(() => {
 })
 
 describe('desktop settings controller', () => {
+  it('routes strict version actions and shares their busy state with update/network controls', async () => {
+    const world = fixture()
+    const requests = []
+    world.options.versions = { isBusy: () => true, getState: () => ({ phase: 'backup' }),
+      handleAction: async request => { requests.push(request) } }
+    assert.equal(world.controller.getState().versions.phase, 'backup')
+    assert.equal(world.controller.isHarnessBusy(), true)
+    for (const request of [{ type: 'harness-version-switch', version: '1.0.0' },
+      { type: 'harness-version-install', version: '0.1.0-rc.8' }, { type: 'harness-version-lock', locked: true },
+      { type: 'harness-versions-refresh' }, { type: 'harness-versions-backups' }]) {
+      assert.deepEqual(await world.controller.handleAction(request), { ok: true })
+      assert.deepEqual(requests.at(-1), request)
+    }
+    assert.equal((await world.controller.handleAction({ type: 'harness-version-switch', version: '../private' })).ok, false)
+    assert.equal(requests.length, 5)
+    await world.controller.inspectProxy()
+    assert.match(world.controller.proxyStatus, /按系统规则直连/u)
+  })
+
   it('exposes plugin snapshots and routes only validated fixed plugin operations without invoking Harness install', async () => {
     const world = fixture()
     const pluginCalls = []

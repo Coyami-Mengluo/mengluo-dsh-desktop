@@ -26,6 +26,17 @@
       <header><p class="eyebrow">运行环境</p><h1>Harness</h1><p class="subtitle">管理官方运行环境，保留原生界面与功能。</p></header>
       <div class="card version-card"><div class="card-heading"><div><span class="overline">当前版本</span><h2 id="harness-version">正在读取…</h2></div><span id="harness-badge" class="badge">准备中</span></div><p id="harness-status" class="detail" role="status">正在读取 Harness 状态。</p><div class="actions"><button class="primary" id="harness-primary" data-action="harness-check">检查更新</button><button id="harness-progress" data-action="harness-progress" hidden>查看进度</button><button id="terminal" data-action="terminal">打开终端</button></div></div>
       <div class="card preferences"><div class="setting-row"><div><label for="harness-auto">自动检查更新</label><p>后台下载并校验新版本，由你确认重启切换。</p></div><label class="switch"><input id="harness-auto" type="checkbox" aria-label="自动检查 Harness 更新"><span aria-hidden="true"></span></label></div><div class="setting-row"><div><label for="harness-interval">检查频率</label><p>客户端运行期间生效。</p></div><select id="harness-interval"><option value="6h">每 6 小时</option><option value="24h">每天</option><option value="7d">每周</option></select></div><div class="setting-row"><div><label for="harness-channel">更新通道</label><p>自动跟随当前版本的发布通道。</p></div><select id="harness-channel"><option value="auto">自动跟随</option><option value="latest">稳定版</option><option value="next">预览版</option></select></div></div>
+      <div class="card" id="runtime-versions-card">
+        <div class="card-heading"><h2>版本管理</h2><button id="versions-refresh" data-action="harness-versions-refresh">获取历史版本</button></div>
+        <p class="detail">已安装版本可离线验证后切换；历史版本从官方目录获取，使用当前下载源安装。</p>
+        <div class="setting-row"><label for="runtime-version-select">目标版本</label><select id="runtime-version-select" aria-label="目标 Harness 版本"></select></div>
+        <div class="actions"><button class="primary" id="runtime-version-action" data-action="harness-version-switch" disabled>切换到此版本</button><button data-action="harness-versions-backups">打开降级备份</button></div>
+        <p id="runtime-version-status" class="detail" role="status" aria-live="polite"></p>
+        <progress id="runtime-version-progress" aria-label="版本操作进度" hidden></progress>
+        <p id="runtime-version-catalog-error" class="notice" hidden>暂时无法获取历史版本，已安装版本仍可选择。请检查系统代理后重试。</p>
+        <div class="setting-row"><div><label for="harness-version-lock">锁定当前版本</label><p>仍可检查新版，但不会自动下载或切换。开启时取消已有的待切换更新。</p></div><label class="switch"><input id="harness-version-lock" type="checkbox" aria-label="锁定当前 Harness 版本"><span aria-hidden="true"></span></label></div>
+        <p class="notice">切换会重启客户端。降级前自动备份 Harness 数据，不包含工作区文件；旧版本不保证兼容新数据和插件。备份含敏感数据，请勿公开分享。</p>
+      </div>
       <p class="section-note">Harness 与客户端独立更新。切换设置不会移除已有插件或聊天数据。</p>
     </section>
     <section id="panel-plugins" role="tabpanel" aria-labelledby="tab-plugins" tabindex="0" hidden>

@@ -14,6 +14,54 @@ afterEach(() => {
 })
 
 describe('native Harness update manager', () => {
+  it('pinned versions only notify and never prepare a pending automatic update', async t => {
+    const world = fixture()
+    t.after(() => world.manager.dispose())
+    world.manager.state.versionLocked = true
+    await world.manager.checkForUpdates({ manual: false })
+    assert.equal(world.installs, 0)
+    assert.equal(world.manager.state.pendingVersion, undefined)
+    assert.equal(world.manager.availableRelease.version, '0.1.0-rc.6')
+    assert.match(world.notifications[0].body, /已锁定/u)
+    await world.manager.checkForUpdates({ manual: true })
+    assert.equal(world.installs, 0)
+    assert.equal(world.dialogs.at(-1).message, '当前 Harness 版本已锁定')
+    assert.equal(world.manager.prepareRelease(world.manager.availableRelease), false)
+  })
+
+  it('stage-only historical installation preserves selection and never announces a scheduled update', async t => {
+    const world = fixture({ runUpdate: async ({ userData, release }) => createSealedSlot(userData, release.version) })
+    t.after(() => world.manager.dispose())
+    world.manager.state.versionLocked = true
+    world.manager.state.pendingVersion = '0.1.0-rc.7'
+    const previous = structuredClone(world.manager.state)
+    assert.equal(world.manager.prepareRelease({ version: '0.1.0-rc.4' }, { stageOnly: true }), true)
+    const installed = await world.manager.installPromise
+    assert.equal(installed.version, '0.1.0-rc.4')
+    assert.deepEqual(world.manager.state, previous)
+    assert.equal(world.notifications.length, 0)
+    assert.equal(world.manager.prepareRelease(world.manager.currentRuntime, { stageOnly: true }), false)
+  })
+
+  it('version-operation lock blocks update preparation, checks and stale restart prompts', async t => {
+    let busy = true, restarted = false
+    const answer = Promise.withResolvers()
+    const world = fixture({ isVersionBusy: () => busy, showMessage: () => answer.promise, requestRestart: () => { restarted = true } })
+    t.after(() => world.manager.dispose())
+    const release = { version: '0.1.0-rc.6' }
+    world.manager.state.pendingVersion = release.version
+    await world.manager.checkForUpdates({ manual: true })
+    assert.equal(world.requests, 0)
+    await world.manager.promptRestart(release)
+    assert.equal(world.dialogs.length, 0)
+    busy = false
+    const prompt = world.manager.promptRestart(release)
+    world.manager.state.pendingVersion = undefined
+    answer.resolve({ response: 0 })
+    await prompt
+    assert.equal(restarted, false)
+  })
+
   it('blocks automatic and manual Harness preparation while a plugin operation holds the shared lock', async t => {
     for (const manual of [false, true]) {
       let pluginBusy = true
@@ -59,6 +107,7 @@ describe('native Harness update manager', () => {
     })
     t.after(() => harness.manager.dispose())
     const release = { version: '0.1.0-rc.6' }
+    harness.manager.state.pendingVersion = release.version
     await harness.manager.promptRestart(release)
     assert.equal(harness.dialogs.length, 0)
     pluginBusy = false
@@ -534,6 +583,7 @@ describe('native Harness update manager', () => {
       installed: true, version: '0.1.0-rc.5', status: 'idle',
       availableVersion: undefined, pendingVersion: undefined,
       autoCheck: true, interval: '24h', channel: 'auto',
+      versionLocked: false,
       progressAvailable: false, error: undefined,
     })
   })
@@ -831,6 +881,7 @@ function fixture(options = {}) {
     getDownloadSource: options.getDownloadSource,
     onDownloadStatus: options.onDownloadStatus,
     isPluginBusy: options.isPluginBusy,
+    isVersionBusy: options.isVersionBusy,
     getLogPath: () => undefined,
     log: text => { logs.push(text) },
     requestRestart: options.requestRestart ?? (() => {}),

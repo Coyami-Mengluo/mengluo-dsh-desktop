@@ -4,6 +4,18 @@ This log records client features, improvements, fixes and public releases. Inter
 
 本日志记录客户端新增功能、改进、修复和公开版本。0.5.3、0.5.4 为内部版本，不列为公开发布。
 
+## 0.5.9 — 2026-09-15
+
+- Added Harness version management: retrieve official historical releases, install independent runtime slots, and verify installed versions offline before a confirmed restart switches versions.
+- Added version pinning: checks can still notify about new releases, but pinned versions are not automatically downloaded or replaced.
+- Added verified local Harness data backups before downgrades. Failed verification or backup blocks the switch; startup failures retain the existing installed-runtime fallback.
+- Fixed settings and both update windows opening at the screen center instead of the main-window center, with display-edge clamping and preservation of manually moved visible windows.
+
+- 新增 Harness 版本管理：获取官方历史版本、安装独立运行环境，已安装版本可离线校验，通过启动测试并确认重启后切换。
+- 新增版本锁定：仍可检查并提醒新版，但不自动下载或替换锁定版本。
+- 降级前自动备份并校验本地 Harness 数据；校验或备份失败时中止切换，启动失败时保留已有版本回退机制。
+- 修复设置及两类更新窗口按屏幕居中弹出的问题，改为按主窗口居中并限制在所在屏幕内，已打开的窗口保留手动拖动位置。
+
 ## 0.5.8 — 2026-09-13
 
 - Fixed loopback links being handed to the external browser, including the IPv4 loopback range, the absolute localhost name and IPv4-mapped loopback addresses. Ordinary web links and exact-origin Harness navigation are unchanged.

@@ -141,7 +141,7 @@ export function listDshReleases(value) {
     .sort((left, right) => compareSemver(right.version, left.version))
     .map(release => Object.freeze({
       ...release,
-      recommended: release.version === tagged.releases.latest.version,
+      recommended: release.version === tagged.releases.latest?.version,
       preview: parseSemver(release.version).prerelease.length > 0,
     })))
 }

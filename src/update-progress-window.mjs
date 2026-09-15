@@ -1,3 +1,5 @@
+import { centerHiddenChild } from './window-placement.mjs'
+
 const STATE_CHANNEL = 'mengluo:update-progress:state'
 const READY_CHANNEL = 'mengluo:update-progress:ready'
 
@@ -142,6 +144,7 @@ export function createUpdateProgressWindow(options) {
     candidate.once('ready-to-show', () => {
       if (!disposed && !candidate.isDestroyed()) {
         windowReady = true
+        centerHiddenChild(candidate, getParent(), options.screen)
         candidate.showInactive()
       }
     })
@@ -167,6 +170,7 @@ export function createUpdateProgressWindow(options) {
     const candidate = createWindow()
     if (candidate !== undefined && !candidate.isDestroyed() && windowReady) {
       sendState()
+      centerHiddenChild(candidate, getParent(), options.screen)
       candidate.showInactive()
     }
   }
@@ -192,9 +196,9 @@ export function createUpdateProgressWindow(options) {
       createWindow()
       sendState()
     },
-    complete(version) {
+    complete(version, stageOnly = false) {
       if (disposed) return
-      publish('complete', 'complete', version)
+      publish('complete', 'complete', version, stageOnly ? '此版本已安装并通过验证，但尚未切换。请在设置的版本管理中选择并确认切换。' : undefined)
       reveal()
     },
     fail(version) {

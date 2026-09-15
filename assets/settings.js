@@ -21,6 +21,9 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
   let unloading = false
   const pluginReplyLimits = {}
   let toastTimer
+  let runtimeSelection = ''
+  let runtimeListSignature = ''
+  let runtimeRefreshTimer
   const scrollPositions = new Map()
   const pluginListSignatures = new Map()
   const text = (id, value) => { const element = byId(id); const next = String(value ?? ''); if (element.textContent !== next) element.textContent = next }
@@ -52,6 +55,53 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
     if (next === 'plugins' && !pluginsRequested) {
       pluginsRequested = true
       void act({ type: 'plugins-refresh' })
+    }
+  }
+  function renderVersions(state) {
+    const versions = state.versions ?? {}
+    const harness = state.harness ?? {}
+    const items = versions.items ?? []
+    const input = byId('runtime-version-select')
+    const signature = JSON.stringify([items, languageState().locale])
+    if (runtimeListSignature !== signature) {
+      runtimeListSignature = signature
+      input.replaceChildren(...items.map(item => {
+        const option = document.createElement('option')
+        option.value = item.version
+        option.textContent = [item.version, item.current ? tr('当前版本') : item.installed ? tr('已安装') : tr('需下载'),
+          item.preview ? tr('预览版') : '', item.failed ? tr('曾启动失败，将重新验证') : ''].filter(Boolean).join(' · ')
+        return option
+      }))
+      if (!items.some(item => item.version === runtimeSelection)) runtimeSelection = harness.version ?? items[0]?.version ?? ''
+      input.value = runtimeSelection
+    }
+    const selected = items.find(item => item.version === runtimeSelection)
+    const busy = versions.busy || versions.loading || state.network?.busy || harness.status === 'checking'
+      || state.client?.status === 'installing'
+    disable('runtime-version-select', busy || !harness.installed)
+    text('runtime-version-action', selected?.current ? tr('当前版本') : selected?.installed ? tr('切换到此版本') : tr('下载安装此版本'))
+    byId('runtime-version-action').dataset.action = selected?.installed ? 'harness-version-switch' : 'harness-version-install'
+    disable('runtime-version-action', busy || !selected || selected.current || !harness.installed)
+    checkbox('harness-version-lock', versions.locked)
+    disable('harness-version-lock', busy || !harness.installed || busyActions.has('harness-version-lock'))
+    const remaining = Math.max(0, Math.ceil(((versions.refreshAfter ?? 0) - Date.now()) / 1000))
+    text('versions-refresh', versions.loading ? tr('正在获取…') : remaining ? tr`获取历史版本（${remaining} 秒）` : tr('获取历史版本'))
+    disable('versions-refresh', busy || !harness.installed || remaining > 0)
+    clearTimeout(runtimeRefreshTimer)
+    if (remaining && !unloading) runtimeRefreshTimer = setTimeout(() => renderVersions(latest), 1000)
+    const labels = { idle: tr('选择已安装版本，或获取官方历史版本。'), confirming: tr('等待确认…'),
+      installing: tr('正在安装独立运行环境，可点击上方“查看进度”。'),
+      installed: tr('安装完成。选择此版本并点击切换，才会重启使用。'),
+      verifying: tr('正在校验已安装文件并进行隔离启动测试…'), stopping: tr('正在停止 Harness 后台…'),
+      backup: tr('正在备份并校验 Harness 数据…'), restarting: tr('正在重启并切换版本…'),
+      error: tr('版本操作未完成。请查看日志；降级备份上限为 2 GiB / 100000 项，不支持数据目录外的链接。'),
+    }
+    text('runtime-version-status', (labels[versions.phase] ?? labels.idle)
+      + (versions.phase === 'backup' && versions.progress ? ' ' + tr`${versions.progress.files} 个文件 · ${bytes(versions.progress.bytes)}` : ''))
+    show('runtime-version-progress', versions.busy && !['confirming', 'restarting'].includes(versions.phase))
+    show('runtime-version-catalog-error', versions.catalogError)
+    if (versions.busy || versions.loading) {
+      for (const id of ['harness-primary', 'terminal', 'harness-auto', 'harness-interval', 'harness-channel']) disable(id, true)
     }
   }
   function toast(message) {
@@ -393,7 +443,7 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
     else if (checking) primary('harness', tr('正在检查…'), 'harness-check', true)
     else if (harness.status === 'pending') primary('harness', tr('重启并切换'), 'harness-restart', client.status === 'installing')
     else if (!harness.installed) primary('harness', tr('选择版本并安装'), 'harness-setup', network.busy)
-    else if (harness.status === 'available') primary('harness', tr('下载更新'), 'harness-download', network.busy || client.status === 'installing')
+    else if (harness.status === 'available' && !harness.versionLocked) primary('harness', tr('下载更新'), 'harness-download', network.busy || client.status === 'installing')
     else primary('harness', tr('检查更新'), 'harness-check', client.status === 'installing')
     show('harness-progress', harness.progressAvailable || installing)
     disable('terminal', !harness.installed || client.status === 'installing')
@@ -403,6 +453,8 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
     disable('harness-auto', installing || checking || busyActions.has('harness-preferences'))
     disable('harness-interval', installing || checking || !harness.autoCheck || busyActions.has('harness-preferences'))
     disable('harness-channel', installing || checking || busyActions.has('harness-preferences'))
+    if (harness.versionLocked) text('harness-status', tr('当前版本已锁定。检查更新只提醒；请在版本管理中手动安装和切换。'))
+    renderVersions(state)
     selectValue('download-source', network.source)
     disable('download-source', network.busy || installing || busyActions.has('download-source'))
     show('mirror-notice', network.source === 'npmmirror')
@@ -525,6 +577,10 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
       if (snapshotId(button.dataset.snapshotId)) void act({ type: 'plugin-restore', id: button.dataset.snapshotId })
       return
     }
+    if (['harness-version-install', 'harness-version-switch'].includes(button.dataset.action)) {
+      void act({ type: button.dataset.action, version: runtimeSelection })
+      return
+    }
     void act({ type: button.dataset.action, ...(button.dataset.pluginId ? { id: button.dataset.pluginId } : {}) })
   })
   for (const tab of document.querySelectorAll('[data-plugin-tab]')) {
@@ -556,6 +612,7 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
     unloading = true
     clearTimeout(pluginSearchTimer)
     clearInterval(pluginCooldownTimer)
+    clearTimeout(runtimeRefreshTimer)
     pluginCooldownTimer = undefined
   })
   const preferences = (id, type, key, check = false) => byId(id).addEventListener('change', event => {
@@ -565,6 +622,13 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
   preferences('harness-interval', 'harness-preferences', 'interval')
   preferences('harness-channel', 'harness-preferences', 'channel')
   preferences('client-auto', 'client-preferences', 'autoCheck', true)
+  byId('runtime-version-select').addEventListener('change', event => {
+    runtimeSelection = event.target.value
+    renderVersions(latest)
+  })
+  byId('harness-version-lock').addEventListener('change', event => {
+    void act({ type: 'harness-version-lock', locked: event.target.checked })
+  })
   byId('download-source').addEventListener('change', event => { void act({ type: 'download-source', source: event.target.value }) })
   for (const input of document.querySelectorAll('select')) input.addEventListener('blur', () => render(latest))
   const languageSelect = byId('client-language')
@@ -585,6 +649,7 @@ import { tr, languageState, onLanguageChange, setLanguagePreference } from './i1
   onLanguageChange(() => {
     const scroll = byId('settings-content').scrollTop
     pluginListSignatures.clear()
+    runtimeListSignature = ''
     snapshotSignature = undefined
     render(latest)
     renderLanguage()

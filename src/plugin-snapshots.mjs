@@ -2,6 +2,8 @@ import { constants } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
+import { homedir } from 'node:os'
+import { parseSemver } from './update-policy.mjs'
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u
 const HASH = /^[a-f0-9]{64}$/u
@@ -289,6 +291,44 @@ async function atomicJson(filename, data) {
   try { await handle.writeFile(serialized); await handle.sync() } finally { await handle.close() }
   await plainAncestors(filename, false)
   await fs.rename(temporary, filename)
+}
+
+/** Full local data backup before a downgrade. Caller must hold the backend/plugin pause.
+ * Reuses the byte-verified copier, but never participates in plugin snapshot retention/restore.
+ * Missing files, external links, mutation, disk/size limits fail closed. No source is modified.
+ */
+export async function createHarnessDataBackup({ userData, dshHome, fromVersion, toVersion, onProgress }) {
+  parseSemver(fromVersion); parseSemver(toVersion)
+  const source = await plainAncestors(absolute(dshHome))
+  const client = await plainAncestors(absolute(userData))
+  if (path.relative(source, homedir()) === '' || within(source, client) || within(client, source)) throw problem('SNAPSHOT_PATH')
+  const store = path.join(client, 'harness-data-backups')
+  const record = path.join(client, 'plugin-sources.json')
+  const progress = phase => {
+    let last = 0
+    return ({ files = 0, bytes = 0 } = {}) => {
+      if (Date.now() - last < 200) return
+      last = Date.now()
+      try { onProgress?.({ phase, files, bytes }) } catch { /* Presentation is optional. */ }
+    }
+  }
+  await plainAncestors(store)
+  await fs.mkdir(store, { recursive: true, mode: 0o700 })
+  await plainAncestors(store)
+  const target = path.join(store, randomUUID())
+  await fs.mkdir(target, { mode: 0o700 })
+  // An incomplete directory is retained for diagnosis; only manifest.json marks a verified backup.
+  await atomicJson(path.join(target, 'request.json'), { fromVersion, toVersion, createdAt: new Date().toISOString() })
+  const original = await scanState(source, record, progress('scan'))
+  await materialize(source, record, path.join(target, 'dsh-home'), path.join(target, 'plugin-sources.json'), original, progress('copy'))
+  const copied = await scanState(path.join(target, 'dsh-home'), path.join(target, 'plugin-sources.json'), progress('verify'))
+  const unchanged = await scanState(source, record, progress('verify'))
+  if (fingerprint(original) !== fingerprint(copied) || fingerprint(original) !== fingerprint(unchanged)) throw problem('SNAPSHOT_CHANGED')
+  await atomicJson(path.join(target, 'manifest.json'), {
+    schema: 1, kind: 'harness-downgrade-data', fromVersion, toVersion,
+    createdAt: new Date().toISOString(), source, state: original, fingerprint: fingerprint(original),
+  })
+  return target
 }
 
 /** Private, bounded byte snapshots. Never invokes npm, a CLI, or the network. */

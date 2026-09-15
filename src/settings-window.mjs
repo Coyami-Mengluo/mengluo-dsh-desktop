@@ -1,6 +1,8 @@
 import { pathToFileURL } from 'node:url'
+import { centerHiddenChild } from './window-placement.mjs'
 import { normalizePluginSearchQuery } from './plugin-catalog.mjs'
 import { safeRateLimitReason } from './plugin-rate-limit.mjs'
+import { validRuntimeVersion } from './runtime-versions.mjs'
 
 export const SETTINGS_IPC = Object.freeze({
   state: 'mengluo:settings:state',
@@ -14,6 +16,7 @@ const SIMPLE_ACTIONS = new Set([
   'terminal', 'client-check', 'client-download', 'client-install', 'client-progress',
   'open-log', 'open-repository', 'open-official', 'open-client-releases', 'test-connection',
   'plugins-refresh', 'plugins-check', 'plugins-snapshots', 'plugins-recover', 'plugins-restart',
+  'harness-versions-refresh', 'harness-versions-backups',
 ])
 const PLUGIN_ACTIONS = new Set(['plugin-install', 'plugin-update', 'plugin-remove', 'plugin-source'])
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -63,6 +66,12 @@ export function validateSettingsAction(request) {
     return Object.keys(request).length === 2 && hasOnly(request, ['type', 'source'])
       && ['official', 'npmmirror'].includes(request.source)
   }
+  if (['harness-version-install', 'harness-version-switch'].includes(request.type)) {
+    return Object.keys(request).length === 2 && hasOnly(request, ['type', 'version']) && validRuntimeVersion(request.version)
+  }
+  if (request.type === 'harness-version-lock') {
+    return Object.keys(request).length === 2 && hasOnly(request, ['type', 'locked']) && typeof request.locked === 'boolean'
+  }
   if (!['harness-preferences', 'client-preferences'].includes(request.type)
     || Object.keys(request).length !== 2 || !hasOnly(request, ['type', 'patch'])
     || !isRecord(request.patch) || Object.keys(request.patch).length === 0) return false
@@ -105,7 +114,7 @@ export function createSettingsWindow(options) {
     if (!disposed && window && !window.isDestroyed() && !window.webContents.isDestroyed()) {
       // Errors can contain launch tokens or user paths. Only generic failure text goes to this surface.
       const state = { ...latest }
-      for (const key of ['harness', 'client', 'plugins']) {
+      for (const key of ['harness', 'client', 'plugins', 'versions']) {
         if (state[key]) state[key] = { ...state[key], error: state[key].error ? '操作未完成，请查看日志。' : undefined }
       }
       if (state.plugins) {
@@ -155,6 +164,7 @@ export function createSettingsWindow(options) {
       sectionRevision += 1
       if (window && !window.isDestroyed()) {
         send()
+        centerHiddenChild(window, options.getParent?.(), options.screen)
         if (window.isMinimized?.()) window.restore()
         window.show()
         window.focus()
@@ -187,6 +197,7 @@ export function createSettingsWindow(options) {
       void candidate.loadFile(options.htmlPath).then(() => {
         if (!disposed && window === candidate && !candidate.isDestroyed()) {
           send()
+          centerHiddenChild(candidate, options.getParent?.(), options.screen)
           candidate.show()
           candidate.focus()
         }

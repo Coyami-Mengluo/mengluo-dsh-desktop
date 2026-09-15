@@ -47,6 +47,7 @@ export class HarnessUpdateManager {
     this.onSettingsRequested = options.onSettingsRequested ?? (() => {})
     this.onSettingsChanged = options.onSettingsChanged
     this.isPluginBusy = options.isPluginBusy ?? (() => false)
+    this.isVersionBusy = options.isVersionBusy ?? (() => false)
     this.onProgressRequested = options.onProgressRequested ?? (() => { this.reportProgress('show') })
     this.hasClientProgress = options.hasClientProgress ?? (() => false)
     this.getDownloadSource = options.getDownloadSource ?? (() => 'official')
@@ -136,6 +137,7 @@ export class HarnessUpdateManager {
   /** Check the official npm package and optionally present a native result. */
   async checkForUpdates({ manual = false } = {}) {
     if (this.disposed) return
+    if (this.isVersionBusy()) { this.scheduleAutomaticCheck(true); return }
     if (this.currentRuntime === undefined) {
       if (manual) this.onSetupRequested?.()
       return
@@ -225,6 +227,12 @@ export class HarnessUpdateManager {
   }
 
   async presentCheckResult(result) {
+    if (this.isVersionBusy()) return
+    if (this.state.versionLocked && result.release) {
+      await this.showMessage({ type: 'info', title: 'Harness 更新', message: '当前 Harness 版本已锁定',
+        detail: `发现新版本 ${result.release.version}。可在版本管理中选择并切换；不会自动替换当前版本。` })
+      return
+    }
     if (result.release === undefined) {
       const channel = resolveUpdateChannel(result.currentVersion, this.state.channel)
       await this.showMessage({
@@ -253,19 +261,32 @@ export class HarnessUpdateManager {
   prepareCheckResult(result) {
     const release = result.release
     if (release === undefined || this.state.pendingVersion === release.version) return
+    if (this.state.versionLocked) {
+      if (this.lastLockedNotification !== release.version && this.electron.Notification.isSupported()) {
+        this.lastLockedNotification = release.version
+        this.notification?.close?.()
+        this.notification = new this.electron.Notification({ title: 'Harness 发现新版本',
+          body: `发现新版本 ${release.version}。当前版本已锁定，请在版本管理中手动切换。`, silent: true })
+        this.notification.on('click', () => { this.onSettingsRequested('harness') })
+        this.notification.show()
+      }
+      return
+    }
     this.prepareRelease(release, { reportFailure: false })
   }
 
-  prepareRelease(release, { reportFailure, initial = false }) {
+  prepareRelease(release, { reportFailure, initial = false, stageOnly = false } = {}) {
     if (this.disposed || this.isPluginBusy() || (!initial && this.currentRuntime === undefined)) return false
-    if (!initial && this.state.pendingVersion === release.version) return false
+    if (!stageOnly && !initial && (this.isVersionBusy() || this.state.versionLocked)) return false
+    if (this.currentRuntime?.version === release.version) return false
+    if (!initial && !stageOnly && this.state.pendingVersion === release.version) return false
     if (this.installPromise !== undefined) {
       return false
     }
     this.preparingVersion = release.version
     this.settingsError = undefined
     this.reportProgress('begin', release.version)
-    this.installPromise = this.installRelease(release, { reportFailure, initial }).finally(() => {
+    this.installPromise = this.installRelease(release, { reportFailure, initial, stageOnly }).finally(() => {
       this.installPromise = undefined
       this.preparingVersion = undefined
       this.rebuildMenu()
@@ -274,10 +295,10 @@ export class HarnessUpdateManager {
     return true
   }
 
-  async installRelease(release, { reportFailure, initial = false }) {
+  async installRelease(release, { reportFailure, initial = false, stageOnly = false }) {
     if (typeof this.npmCliPath !== 'string' || this.npmCliPath.length === 0) {
       const detail = '客户端内置安装组件不可用；请重新安装客户端，已有 Harness 数据不会被覆盖。'
-      if (initial) throw new Error(detail)
+      if (initial || stageOnly) throw new Error(detail)
       this.log(`update preparation skipped: ${detail}\n`)
       this.reportProgress('fail', release.version)
       if (reportFailure) {
@@ -331,8 +352,12 @@ export class HarnessUpdateManager {
         signal: controller.signal,
       })
       if (controller.signal.aborted || this.disposed) return
-      const installed = initial ? readManagedRuntime(this.userData, release.version) : undefined
-      if (initial && installed === undefined) throw new Error('安装结果未通过完整性校验，请重试。')
+      const installed = initial || stageOnly ? readManagedRuntime(this.userData, release.version) : undefined
+      if ((initial || stageOnly) && installed === undefined) throw new Error('安装结果未通过完整性校验，请重试。')
+      if (stageOnly) {
+        this.reportProgress('complete', release.version, true)
+        return installed
+      }
       const scheduled = this.persistState(
         markRuntimePending(this.state, release.version),
         `scheduling Harness ${release.version}`,
@@ -347,7 +372,7 @@ export class HarnessUpdateManager {
       this.settingsError = 'Harness 安装或更新未完成，当前版本未被覆盖。可以重试或查看日志。'
       this.log(`update installation failed: ${String(error)}\n`)
       if (!this.disposed) this.reportProgress('fail', release.version)
-      if (initial) throw error
+      if (initial || stageOnly) throw error
       if (reportFailure && !this.disposed) {
         await this.showMessage({
           type: 'error',
@@ -421,7 +446,7 @@ export class HarnessUpdateManager {
   }
 
   async promptRestart(release) {
-    if (this.disposed || this.isPluginBusy()) return
+    if (this.disposed || this.isPluginBusy() || this.isVersionBusy() || this.state.pendingVersion !== release.version) return
     const choice = await this.showMessage({
       type: 'info',
       title: 'Harness 更新',
@@ -432,7 +457,8 @@ export class HarnessUpdateManager {
       cancelId: 1,
       noLink: true,
     })
-    if (choice.response === 0 && !this.disposed && !this.isPluginBusy()) this.requestRestart()
+    if (choice.response === 0 && !this.disposed && !this.isPluginBusy() && !this.isVersionBusy()
+      && this.state.pendingVersion === release.version) this.requestRestart()
   }
 
   focusWindow() {
@@ -445,14 +471,14 @@ export class HarnessUpdateManager {
 
   /** Open a shell in the selected Harness runtime directory for local plugin operations. */
   async openRuntimeTerminal() {
-    if (this.disposed || this.isPluginBusy()) return
+    if (this.disposed || this.isPluginBusy() || this.isVersionBusy()) return
     if (this.currentRuntime === undefined) {
       this.onSetupRequested?.()
       return
     }
     try {
       const proxy = await this.resolveSystemProxy('Harness terminal')
-      if (this.disposed || this.isPluginBusy()) return
+      if (this.disposed || this.isPluginBusy() || this.isVersionBusy()) return
       const launch = createHarnessTerminalLaunch({
         runtime: this.currentRuntime,
         npmCliPath: this.npmCliPath,
@@ -561,7 +587,7 @@ export class HarnessUpdateManager {
     const harnessMenuTemplate = [
       {
         label: '打开 Harness 终端…',
-        enabled: installed && !this.isPluginBusy(),
+        enabled: installed && !this.isPluginBusy() && !this.isVersionBusy(),
         click: () => { void this.openRuntimeTerminal() },
       },
       { label: '客户端设置…', click: () => { this.onSettingsRequested('harness') } },
@@ -599,12 +625,13 @@ export class HarnessUpdateManager {
       installed: this.currentRuntime !== undefined, version: this.currentRuntime?.version,
       status, availableVersion: this.availableRelease?.version, pendingVersion: this.state.pendingVersion,
       autoCheck: this.state.autoCheck, interval: this.state.interval, channel: this.state.channel ?? 'auto',
+      versionLocked: this.state.versionLocked,
       progressAvailable: this.progressAvailable, error: this.settingsError,
     }
   }
 
   updatePreferences(patch) {
-    if (this.disposed || this.checkPromise !== undefined || this.installPromise !== undefined || this.preparingVersion !== undefined) throw new Error('请等待当前 Harness 操作结束后再修改设置')
+    if (this.disposed || this.isVersionBusy() || this.checkPromise !== undefined || this.installPromise !== undefined || this.preparingVersion !== undefined) throw new Error('请等待当前 Harness 操作结束后再修改设置')
     if (patch === null || typeof patch !== 'object' || Array.isArray(patch)
       || ![Object.prototype, null].includes(Object.getPrototypeOf(patch)) || Object.keys(patch).length === 0
       || Object.keys(patch).some(key => !['autoCheck', 'interval', 'channel'].includes(key))
@@ -630,7 +657,7 @@ export class HarnessUpdateManager {
     const interval = UPDATE_INTERVAL_MS[this.state.interval]
     const elapsed = typeof this.state.lastCheckedAt === 'number' ? now - this.state.lastCheckedAt : interval
     const untilDue = Math.max(0, interval - Math.max(0, elapsed))
-    const delay = initial && due ? FIRST_AUTOMATIC_CHECK_DELAY_MS : (due ? 1_000 : untilDue)
+    const delay = (initial || this.isVersionBusy()) && due ? FIRST_AUTOMATIC_CHECK_DELAY_MS : (due ? 1_000 : untilDue)
     this.checkTimer = setTimeout(() => {
       this.checkTimer = undefined
       void this.checkForUpdates({ manual: false })
@@ -646,7 +673,6 @@ export class HarnessUpdateManager {
   }
 
   persistState(nextState, context) {
-    this.state = nextState
     try {
       this.state = writeRuntimeState(this.userData, nextState)
       return true
@@ -735,7 +761,7 @@ export function runUpdateWorker(options) {
     }
     try {
       child.send({
-        type: 'install',
+        type: options.operation === 'verify' ? 'verify' : 'install',
         userData: options.userData,
         release: options.release,
         npm: options.npm,

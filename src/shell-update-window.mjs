@@ -1,5 +1,6 @@
 import { pathToFileURL } from 'node:url'
 import { PRODUCT_NAME } from './release-config.mjs'
+import { centerHiddenChild } from './window-placement.mjs'
 
 export const CLIENT_UPDATE_CHANNELS = Object.freeze({
   state: 'mengluo:client-update:state', ready: 'mengluo:client-update:ready', action: 'mengluo:client-update:action',
@@ -35,7 +36,11 @@ export function createShellUpdateWindow(options) {
     update(state) { if (!disposed) { latest = { ...state }; send() } },
     show() {
       if (disposed) return
-      if (window && !window.isDestroyed()) { window.show(); return }
+      if (window && !window.isDestroyed()) {
+        centerHiddenChild(window, options.getParent(), options.screen)
+        window.show()
+        return
+      }
       const parent = options.getParent()
       const candidate = new options.BrowserWindow({
         title: `${PRODUCT_NAME} · 客户端更新`, width: 540, height: 420,
@@ -59,7 +64,11 @@ export function createShellUpdateWindow(options) {
       candidate.on('close', event => { if (!disposed) { event.preventDefault(); candidate.hide() } })
       candidate.on('closed', () => { if (window === candidate) window = undefined })
       void candidate.loadFile(options.htmlPath).then(() => {
-        if (!disposed && window === candidate && !candidate.isDestroyed()) { send(); candidate.showInactive() }
+        if (!disposed && window === candidate && !candidate.isDestroyed()) {
+          send()
+          centerHiddenChild(candidate, options.getParent(), options.screen)
+          candidate.showInactive()
+        }
       }).catch(error => { options.log(`client update window failed: ${String(error)}\n`) })
     },
     dispose() {

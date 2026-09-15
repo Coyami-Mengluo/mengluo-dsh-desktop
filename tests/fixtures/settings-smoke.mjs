@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeTheme, screen } from 'electron'
 
 const [temporary, application, screenshots] = process.argv.slice(2)
 const profile = join(temporary, 'profile')
@@ -23,6 +23,11 @@ async function run() {
   let systemLocale = 'zh-CN'
   const language = createLanguageController({ userData: profile, ipcMain, getSystemLocale: () => systemLocale })
   const state = {
+    versions: { phase: 'idle', locked: false, busy: false, items: [
+      { version: '0.1.2-rc.1', current: true, installed: true, preview: true },
+      { version: '0.1.1', current: false, installed: true },
+      { version: '0.1.0-rc.8', current: false, installed: false, preview: true },
+    ] },
     harness: {
       installed: true, version: '0.1.2-rc.1', status: 'available', availableVersion: '0.1.3-rc.1',
       autoCheck: true, interval: '24h', channel: 'auto', progressAvailable: false,
@@ -64,13 +69,26 @@ async function run() {
   let searchRevision = 0
   let failNextMore = true
   let restartReady
+  const workArea = screen.getPrimaryDisplay().workArea
+  const parent = new BrowserWindow({ show: false, width: 900, height: 600,
+    x: workArea.x + Math.max(0, workArea.width - 930), y: workArea.y + 25 })
+  const { centeredChildPosition } = await import(pathToFileURL(join(application, 'src', 'window-placement.mjs')).href)
+  const assertCentered = window => {
+    const expected = centeredChildPosition(parent.getBounds(), window.getBounds(), screen.getDisplayMatching(parent.getBounds()).workArea)
+    // Win32 physical pixels can round by one DIP at fractional display scaling.
+    assert.ok(window.getPosition().every((value, index) => Math.abs(value - expected[index]) <= 1), 'Settings must center on the parent within display-pixel rounding')
+  }
   controller = createSettingsWindow({
-    BrowserWindow, ipcMain, nativeTheme, language, getParent: () => undefined,
+    BrowserWindow, ipcMain, nativeTheme, language, screen, getParent: () => parent,
     htmlPath: join(application, 'assets', 'settings.html'),
     preloadPath: join(application, 'src', 'settings-preload.cjs'),
     iconPath: join(application, 'assets', 'icon.png'), productName: 'MengLuo DSH Desktop',
     onAction: async request => {
       actions.push(request)
+      if (request.type === 'harness-version-lock') {
+        state.versions.locked = request.locked
+        state.harness.versionLocked = request.locked
+      }
       if (request.type === 'plugins-restart') {
         state.plugins.busy = true
         state.plugins.restarting = true
@@ -127,11 +145,16 @@ async function run() {
   })
   controller.update(state)
   controller.show('harness')
-  const window = BrowserWindow.getAllWindows()[0]
+  const window = controller.window
   const contents = window.webContents
   contents.setBackgroundThrottling(false)
   await expectDom(contents, "document.getElementById('harness-version')?.textContent === '0.1.2-rc.1'")
   await expectDom(contents, "!document.getElementById('client-language').disabled")
+  assertCentered(window)
+  window.setPosition(workArea.x + 12, workArea.y + 45)
+  const draggedPosition = window.getPosition()
+  controller.show('harness')
+  assert.deepEqual(window.getPosition(), draggedPosition, 'Showing a visible settings window must preserve its dragged position')
   assert.equal(await contents.executeJavaScript("typeof require + ':' + typeof process"), 'undefined:undefined')
   assert.equal(await contents.executeJavaScript("Object.keys(window.clientSettings).sort().join(',')"), 'action,onState,ready')
   await checkLayout(contents, 'harness-normal-light', layouts)
@@ -445,6 +468,30 @@ async function run() {
     }
   }
   assert.equal(actions.length, actionsBeforeLanguage, 'Changing language never requests plugin data or mutates Harness')
+  controller.show('harness')
+  await contents.executeJavaScript("document.getElementById('runtime-version-select').value = '0.1.1'; document.getElementById('runtime-version-select').dispatchEvent(new Event('change'))")
+  await expectDom(contents, "document.getElementById('runtime-version-action').textContent === 'Switch to this version' && !document.getElementById('runtime-version-action').disabled")
+  await contents.executeJavaScript("document.getElementById('runtime-version-action').click()")
+  await expect(() => actions.at(-1)?.type === 'harness-version-switch')
+  assert.deepEqual(actions.at(-1), { type: 'harness-version-switch', version: '0.1.1' })
+  await contents.executeJavaScript("document.getElementById('runtime-version-select').value = '0.1.0-rc.8'; document.getElementById('runtime-version-select').dispatchEvent(new Event('change')); document.getElementById('runtime-version-action').click()")
+  await expect(() => actions.at(-1)?.type === 'harness-version-install')
+  assert.deepEqual(actions.at(-1), { type: 'harness-version-install', version: '0.1.0-rc.8' })
+  state.versions.phase = 'backup'; state.versions.busy = true
+  state.versions.progress = { files: 8, bytes: 32768 }
+  controller.update(state)
+  await expectDom(contents, "document.getElementById('runtime-version-action').disabled && document.getElementById('terminal').disabled && !document.getElementById('runtime-version-progress').hidden && document.getElementById('runtime-version-status').textContent.includes('8 files')")
+  await checkLayout(contents, 'versions-backup-narrow-en', layouts)
+  await contents.executeJavaScript("document.getElementById('runtime-versions-card').scrollIntoView()")
+  await screenshot(contents, 'versions-backup-en')
+  state.versions.phase = 'idle'; state.versions.busy = false
+  controller.update(state)
+  await expectDom(contents, "!document.getElementById('harness-version-lock').disabled")
+  await contents.executeJavaScript("document.getElementById('harness-version-lock').click()")
+  await expect(() => actions.at(-1)?.type === 'harness-version-lock')
+  await expectDom(contents, "document.getElementById('harness-status').textContent.includes('pinned')")
+  state.harness.versionLocked = false; state.versions.locked = false
+  controller.update(state)
   controller.show('plugins')
   const beforeRestart = actions.filter(item => item.type === 'plugins-restart').length
   Object.assign(state.plugins, { restartRecommended: true,
@@ -488,7 +535,8 @@ async function run() {
   assert.equal(window.isDestroyed(), false)
   assert.equal(window.isVisible(), false)
   controller.show('network')
-  assert.equal(BrowserWindow.getAllWindows().length, 1)
+  assert.equal(BrowserWindow.getAllWindows().length, 2)
+  assertCentered(window)
   await expectDom(contents, "document.getElementById('panel-network').hidden === false")
   assert.equal(window.isVisible(), true)
   await contents.executeJavaScript("window.setInterval = (callback, delay) => { const id = window.originalSetInterval(callback, delay); window.pluginCooldownIntervals.set(id, {callback,delay}); return id }; window.clearInterval = id => { window.pluginCooldownIntervals.delete(id); window.originalClearInterval(id) }; void 0")
@@ -498,6 +546,7 @@ async function run() {
   await contents.executeJavaScript("window.dispatchEvent(new Event('beforeunload'))")
   assert.equal(await contents.executeJavaScript('window.pluginCooldownIntervals.size'), 0, 'Unloading clears the live countdown timer')
   controller.dispose()
+  parent.destroy()
   language.dispose()
   assert.equal(window.isDestroyed(), true)
   assert.equal(ipcMain.listenerCount(SETTINGS_IPC.ready), 0)
