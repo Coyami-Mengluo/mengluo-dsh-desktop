@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtemp, mkdir, writeFile, readFile, readdir, symlink, truncate } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, readdir, realpath, symlink, truncate } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RuntimeVersionManager, listInstalledVersions } from '../src/runtime-versions.mjs'
@@ -128,7 +128,8 @@ test('pin clears a stale prepared switch; unpin does not install or restart', as
 })
 
 async function directories(t) {
-  const root = await mkdtemp(join(tmpdir(), 'mengluo-version-backup-test-'))
+  // macOS /var aliases /private/var; use the physical fixture root as existing snapshot tests do.
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'mengluo-version-backup-test-')))
   t.after(() => removeTreeWithoutFollowingLinks(root))
   const userData = join(root, 'client'), dshHome = join(root, 'dsh')
   await mkdir(userData); await mkdir(dshHome)

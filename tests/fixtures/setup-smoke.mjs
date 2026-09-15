@@ -209,6 +209,8 @@ async function run() {
 }
 const evaluate = source => desktop.window.webContents.executeJavaScript(source)
 async function clickCaption(selector) {
+  // Native restore can complete before the renderer receives its restored viewport.
+  await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
   const point = await evaluate(`(() => { const bounds = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: Math.round(bounds.x + bounds.width / 2), y: Math.round(bounds.y + bounds.height / 2) } })()`)
   for (const type of ['mouseDown', 'mouseUp']) desktop.window.webContents.sendInputEvent({ type, ...point, button: 'left', clickCount: 1 })
 }
