@@ -4,7 +4,7 @@ This log records client features, improvements, fixes and public releases. Inter
 
 本日志记录客户端新增功能、改进、修复和公开版本。0.5.3、0.5.4 为内部版本，不列为公开发布。
 
-## Unreleased / 未发布
+## 0.5.11 — 2026-09-27
 
 - Fixed Windows shutdown, restart and sign-out incorrectly marking a working Harness runtime as unusable and selecting an older version on the next launch. A stopped, already-ready backend no longer permanently quarantines its version; genuine initial-startup failures still retain fallback protection.
 

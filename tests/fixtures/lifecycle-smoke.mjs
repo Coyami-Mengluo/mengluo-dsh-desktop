@@ -5,12 +5,16 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { app, BrowserWindow, dialog, net, webContents } from 'electron'
 
-const [temporary, application, mode] = process.argv.slice(2)
+const [temporary, application, mode, resources, fixtureRoot] = process.argv.slice(2)
 for (const name of ['appData', 'documents', 'sessionData', 'dsh']) mkdirSync(join(temporary, name))
 app.setPath('appData', join(temporary, 'appData'))
 app.setPath('documents', join(temporary, 'documents'))
 app.setPath('sessionData', join(temporary, 'sessionData'))
 process.env.DSH_HOME = join(temporary, 'dsh')
+if (resources) {
+  Object.defineProperty(app, 'isPackaged', { value: true })
+  Object.defineProperty(process, 'resourcesPath', { value: resources })
+}
 app.getAppPath = () => application
 app.getVersion = () => JSON.parse(readFileSync(join(application, 'package.json'))).version
 const profile = join(temporary, 'appData', 'MengLuo DSH Desktop')
@@ -67,10 +71,11 @@ function slot(version) {
     mkdirSync(join(directory, subdir), { recursive: true })
     writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: `@deepseek-ai/${name}`, version, engines: { node: '>=24' } }))
   }
-  copyFileSync(join(application, 'tests', 'fixtures', 'lifecycle-backend.cjs'), join(root, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'))
+  copyFileSync(join(fixtureRoot, 'tests', 'fixtures', 'lifecycle-backend.cjs'), join(root, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'))
   writeFileSync(join(root, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist', 'index.html'), '<title>fixture</title>')
   mkdirSync(join(root, 'node-runtime'))
-  for (const name of ['node.exe', 'LICENSE']) copyFileSync(join(application, 'build', 'runtime', 'node-runtime', name), join(root, 'node-runtime', name))
+  const nodeRoot = resources ? join(resources, 'runtime', 'node-runtime') : join(application, 'build', 'runtime', 'node-runtime')
+  for (const name of ['node.exe', 'LICENSE']) copyFileSync(join(nodeRoot, name), join(root, 'node-runtime', name))
   writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': version } }))
   writeFileSync(join(root, 'package-lock.json'), '{"packages":{}}')
   writeRuntimeSeal(root, version, { nodeVersion: '24.19.0' })
