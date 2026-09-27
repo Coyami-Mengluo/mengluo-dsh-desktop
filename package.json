@@ -23,6 +23,7 @@
     "smoke:settings": "node scripts/smoke-settings.mjs",
     "smoke:settings:packaged": "node scripts/smoke-settings.mjs --packaged",
     "smoke:main": "node scripts/smoke-main.mjs",
+    "smoke:lifecycle": "node scripts/smoke-lifecycle.mjs",
     "smoke:versions": "node scripts/smoke-versions.mjs",
     "smoke:main:packaged": "node scripts/smoke-main.mjs --packaged",
     "smoke:client-update": "node scripts/smoke-client-update.mjs",

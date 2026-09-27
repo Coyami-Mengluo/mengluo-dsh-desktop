@@ -40,6 +40,7 @@ import { PluginCatalog } from './plugin-catalog.mjs'
 import { PluginManager } from './plugin-manager.mjs'
 import { resolvePluginHome } from './plugin-runtime.mjs'
 import { createBackendReadiness } from './backend-readiness.mjs'
+import { backendFailureAction } from './backend-failure-policy.mjs'
 import { RuntimeVersionManager } from './runtime-versions.mjs'
 import { createHarnessDataBackup } from './plugin-snapshots.mjs'
 
@@ -64,6 +65,7 @@ let logPath
 let startupTimer
 let recentOutput = ''
 let quitStarted = false
+let systemSessionEnding = false
 let mayQuit = false
 let failureShown = false
 let firstRunSetup
@@ -192,6 +194,15 @@ async function startApplication() {
     isQuitting: () => quitStarted,
     focusOfficial: () => { desktopWindow?.focusOfficial() },
     requestQuit: () => { app.quit() },
+    requestSessionEnd: () => {
+      // Set this synchronously: session-end need not travel through before-quit,
+      // and plugin/update confirmation must never hold up an OS-requested exit.
+      systemSessionEnding = true
+      installClientAfterShutdown = undefined
+      clearStartupTimer()
+      backendReadiness?.fail()
+      app.quit()
+    },
     log: text => { appendLog('tray', text) },
   })
   updateProgressWindow = createUpdateProgressWindow({
@@ -410,7 +421,7 @@ function openExternalUrl(url) {
 
 /** Spawn the selected official CLI under its own standalone Node runtime. */
 function startBackend(runtime) {
-  if (quitStarted || pluginBackendPaused || pluginManager?.snapshotRecoveryRequired) return
+  if (quitStarted || systemSessionEnding || pluginBackendPaused || pluginManager?.snapshotRecoveryRequired) return
   backendReadiness?.fail()
   const readiness = createBackendReadiness({
     timeoutMs: STARTUP_TIMEOUT_MS + 15_000,
@@ -467,19 +478,12 @@ function startBackend(runtime) {
     }
   })
   void exit.then(({ code, signal }) => {
-    if (quitStarted || pluginBackendPaused || backend !== child) return
+    if (quitStarted || systemSessionEnding || pluginBackendPaused || backend !== child) return
     const outcome = signal === null ? `退出码 ${String(code)}` : `信号 ${signal}`
-    if (backendOrigin === undefined) {
-      void handleBackendStartupFailure(`Harness 后台在启动时停止（${outcome}）。`)
-    } else {
-      if (selectedRuntime?.source === 'managed') {
-        persistRuntimeState(
-          markRuntimeFailed(readRuntimeState(app.getPath('userData')), selectedRuntime),
-          `recording crashed managed runtime ${selectedRuntime.version}`,
-        )
-      }
-      showFailure(`Harness 后台已停止（${outcome}）。`)
-    }
+    const reason = backendOrigin === undefined
+      ? `Harness 后台在启动时停止（${outcome}）。`
+      : `Harness 后台已停止（${outcome}）。`
+    void handleBackendStartupFailure(reason, { code, signal })
   })
   startupTimer = setTimeout(() => {
     void handleBackendStartupFailure(`Harness 后台在 ${String(STARTUP_TIMEOUT_MS / 1_000)} 秒内没有完成启动。`)
@@ -511,7 +515,7 @@ function preserveLegacyUserData() {
  * @param {import('node:child_process').ChildProcess} child emitting process.
  */
 function acceptReadyUrl(readyUrl, child, readiness) {
-  if (pluginBackendPaused || backend !== child || backendOrigin !== undefined || failureShown) return
+  if (quitStarted || systemSessionEnding || pluginBackendPaused || backend !== child || backendOrigin !== undefined || failureShown) return
   const ready = new URL(readyUrl)
   backendOrigin = ready.origin
   settingsController?.refresh()
@@ -529,13 +533,13 @@ async function loadReadyRenderer(host, readyUrl, child, runtime, readiness) {
   try {
     await host.loadOfficial(readyUrl)
     await new Promise(resolve => { setTimeout(resolve, RENDERER_STABILITY_MS) })
-    if (quitStarted || pluginBackendPaused || failureShown || backend !== child || host.window.isDestroyed()) { readiness.fail(); return }
+    if (quitStarted || systemSessionEnding || pluginBackendPaused || failureShown || backend !== child || host.window.isDestroyed()) { readiness.fail(); return }
+    if (!readiness.ready()) return
     updateManager?.runtimeReady(runtime)
     firstRunSetup?.complete()
-    readiness.ready()
   } catch (error) {
     readiness.fail(error)
-    if (backend !== child || quitStarted || pluginBackendPaused) return
+    if (backend !== child || quitStarted || systemSessionEnding || pluginBackendPaused) return
     await handleBackendStartupFailure(`无法载入 ${PRODUCT_NAME} 界面：${error instanceof Error ? error.message : String(error)}`)
   }
 }
@@ -543,17 +547,20 @@ async function loadReadyRenderer(host, readyUrl, child, runtime, readiness) {
 /** Contain shell and official renderer crashes according to their ownership. */
 function handleRendererGone(kind, details) {
   const window = mainWindow
-  if (quitStarted || pluginBackendPaused || window === undefined || window.isDestroyed() || details.reason === 'clean-exit') return
+  if (quitStarted || systemSessionEnding || pluginBackendPaused || window === undefined || window.isDestroyed() || details.reason === 'clean-exit') return
   const reason = kind === 'official'
     ? `官方 Harness 界面进程意外退出（${details.reason}）。`
     : `桌面标题栏进程意外退出（${details.reason}）。`
-  if (kind === 'official' && selectedRuntime?.source === 'managed') void handleBackendStartupFailure(reason)
+  if (kind === 'official' && selectedRuntime?.source === 'managed') void handleBackendStartupFailure(reason, { rendererReason: details.reason })
   else showFailure(reason)
 }
 
 /** Stop a failed runtime before selecting a verified old slot or returning to installation. */
-async function handleBackendStartupFailure(reason) {
-  if (quitStarted || pluginBackendPaused || failureShown || startupFailureHandling) return
+async function handleBackendStartupFailure(reason, failure = {}) {
+  const action = backendFailureAction({ ...failure, quitting: quitStarted, sessionEnding: systemSessionEnding,
+    paused: pluginBackendPaused, ready: backendReadiness?.isReady() === true })
+  if (action === 'ignore' || failureShown || startupFailureHandling) return
+  const readiness = backendReadiness
   backendReadiness?.fail(new Error(reason))
   startupFailureHandling = true
   clearStartupTimer()
@@ -561,6 +568,16 @@ async function handleBackendStartupFailure(reason) {
   const failedRuntime = selectedRuntime
   const child = backend
   const exit = backendExit
+  if (action !== 'startup-failure') {
+    // A healthy version remains selected after any later crash. For a known
+    // interruption, give session-end time to arrive before showing an error UI.
+    appendLog('desktop', `preserving runtime selection after ${action}\n`)
+    if (action === 'interrupted') await new Promise(resolve => { setTimeout(resolve, 1_000) })
+    if (backend !== child || backendReadiness !== readiness) return
+    startupFailureHandling = false
+    showFailure(reason)
+    return
+  }
   if (failedRuntime?.source !== 'managed') {
     startupFailureHandling = false
     showFailure(reason)
@@ -593,7 +610,7 @@ async function handleBackendStartupFailure(reason) {
     backendExit = undefined
     backendOrigin = undefined
   }
-  if (quitStarted) return
+  if (quitStarted || systemSessionEnding) return
   const fallbackRuntime = selectRuntime(app.getPath('userData'), runtimeState)
   selectedRuntime = fallbackRuntime
   updateManager?.replaceState(runtimeState, fallbackRuntime)
@@ -649,7 +666,7 @@ function appendLog(source, value) {
  * @param {string} reason user-facing failure summary.
  */
 function showFailure(reason) {
-  if (failureShown || quitStarted) return
+  if (failureShown || quitStarted || systemSessionEnding) return
   backendReadiness?.fail(new Error(reason))
   desktopTray?.showWindow()
   reason = redactHarnessTokens(reason)
@@ -670,7 +687,7 @@ function showFailure(reason) {
     ? dialog.showMessageBox(mainWindow, options)
     : dialog.showMessageBox(options)
   void prompt.catch((error) => {
-    dialog.showErrorBox(`${PRODUCT_NAME} 启动失败`, `${detail}\n\n${String(error)}`)
+    if (!systemSessionEnding) dialog.showErrorBox(`${PRODUCT_NAME} 启动失败`, `${detail}\n\n${String(error)}`)
   }).finally(() => { app.quit() })
 }
 
@@ -682,7 +699,7 @@ function clearStartupTimer() {
 
 /** A restore must never swap live plugin files underneath the supervised backend. */
 async function withPluginBackendStopped(operation, { waitUntilReady = false } = {}) {
-  if (quitStarted || pluginBackendPaused || startupFailureHandling || pluginManager?.recoveryRequired) throw new Error('plugin backend pause unavailable')
+  if (quitStarted || systemSessionEnding || pluginBackendPaused || startupFailureHandling || pluginManager?.recoveryRequired) throw new Error('plugin backend pause unavailable')
   pluginBackendPaused = true
   const runtime = selectedRuntime
   let stopped = false
@@ -697,7 +714,7 @@ async function withPluginBackendStopped(operation, { waitUntilReady = false } = 
     await operation()
   } finally {
     pluginBackendPaused = false
-    if (stopped && !quitStarted && !pluginManager?.snapshotRecoveryRequired) {
+    if (stopped && !quitStarted && !systemSessionEnding && !pluginManager?.snapshotRecoveryRequired) {
       failureShown = false
       startupFailureHandling = false
       if (runtime) {
@@ -844,7 +861,7 @@ app.on('before-quit', (event) => {
   if (mayQuit) return
   event.preventDefault()
   if (quitStarted) return
-  if (runtimeVersions?.isBusy() && !runtimeVersions.committed) {
+  if (!systemSessionEnding && runtimeVersions?.isBusy() && !runtimeVersions.committed) {
     showClientSettings('harness')
     if (!pluginQuitNotice) {
       pluginQuitNotice = dialog.showMessageBox({ type: 'info', title: '版本操作尚未结束',
@@ -854,7 +871,7 @@ app.on('before-quit', (event) => {
     }
     return
   }
-  if (pluginManager?.recoveryRequired && !pluginRecoveryExitApproved) {
+  if (!systemSessionEnding && pluginManager?.recoveryRequired && !pluginRecoveryExitApproved) {
     if (!pluginQuitNotice) {
       pluginQuitNotice = dialog.showMessageBox({ type: 'warning', title: '插件进程需要检查',
         message: '尚未确认插件进程已退出',
@@ -867,7 +884,7 @@ app.on('before-quit', (event) => {
     }
     return
   }
-  if (pluginManager?.isBusy()) {
+  if (!systemSessionEnding && pluginManager?.isBusy()) {
     showClientSettings('plugins')
     if (!pluginQuitNotice) {
       pluginQuitNotice = dialog.showMessageBox({ type: 'info', title: '插件操作尚未结束',
@@ -907,7 +924,7 @@ app.on('before-quit', (event) => {
     } catch (error) {
       installClientAfterShutdown = undefined
       appendLog('desktop', `shutdown did not reach quiescence: ${String(error)}\n`)
-      dialog.showErrorBox(`${PRODUCT_NAME} 关闭异常`, `后台进程可能仍在运行。\n\n${String(error)}\n\n日志：${logPath ?? '尚未创建'}`)
+      if (!systemSessionEnding) dialog.showErrorBox(`${PRODUCT_NAME} 关闭异常`, `后台进程可能仍在运行。\n\n${String(error)}\n\n日志：${logPath ?? '尚未创建'}`)
     }
     desktopWindow?.dispose()
     desktopWindow = undefined

@@ -58,7 +58,7 @@ export function createDesktopTray(options) {
         logFailure('hide to tray failed', error)
       }
     })
-    listen(window, 'session-end', () => { options.requestQuit() })
+    listen(window, 'session-end', () => { (options.requestSessionEnd ?? options.requestQuit)() })
   } catch (error) {
     for (const remove of removals.splice(0)) remove()
     tray.destroy()

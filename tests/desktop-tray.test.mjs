@@ -74,10 +74,29 @@ describe('persistent desktop tray', () => {
     world.controller.setHarnessMenu([])
     assert.equal(world.controller.showWindow(), false)
   })
+
+  it('delivers confirmed OS shutdown separately from ordinary quit without cancelling shutdown queries', () => {
+    const world = fixture({ systemSession: true })
+    let prevented = false
+    world.window.emit('query-session-end', { preventDefault: () => { prevented = true } })
+    assert.equal(prevented, false)
+    assert.equal(world.sessionEnds, 0, 'A shutdown query can still be cancelled by the system')
+    assert.equal(world.quitting, false)
+    world.window.emit('session-end')
+    assert.equal(world.sessionEnds, 1)
+    assert.equal(world.quitRequests, 0)
+    assert.equal(world.controller.showWindow(), false)
+    world.window.close()
+    assert.equal(world.window.destroyed, true)
+    world.controller.dispose()
+    assert.equal(world.window.listenerCount('session-end'), 0)
+    world.window.emit('session-end')
+    assert.equal(world.sessionEnds, 1)
+  })
 })
 
-function fixture() {
-  const world = { trays: [], quitting: false, officialFocusCalls: 0, quitRequests: 0 }
+function fixture({ systemSession = false } = {}) {
+  const world = { trays: [], quitting: false, officialFocusCalls: 0, quitRequests: 0, sessionEnds: 0 }
   class Tray extends EventEmitter {
     constructor(image) {
       super()
@@ -118,6 +137,7 @@ function fixture() {
     isQuitting: () => world.quitting,
     focusOfficial: () => { world.officialFocusCalls += 1 },
     requestQuit: () => { world.quitRequests += 1; world.quitting = true },
+    ...(systemSession ? { requestSessionEnd: () => { world.sessionEnds += 1; world.quitting = true } } : {}),
   })
   return Object.assign(world, { controller, tray: world.trays[0], window })
 }
