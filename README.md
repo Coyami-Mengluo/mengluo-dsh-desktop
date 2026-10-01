@@ -1,5 +1,12 @@
 # MengLuo DSH Desktop
 
+> [!IMPORTANT]
+> **Windows users: we recommend the official DeepSeek Harness desktop app.**
+>
+> DeepSeek now provides an official Windows desktop app. Please prefer it over this personally maintained, unofficial client.
+>
+> [Official website and downloads](https://www.deepseek.com/harness/) · [Official Windows (64-bit) download](https://download.deepseek.com/desktop/dsh-latest-windows-x64.exe)
+
 English | [中文](README.zh.md) | [Changelog](CHANGELOG.md)
 
 An unofficial, personal-maintainer Windows desktop client for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). This project is not affiliated with, sponsored by, or endorsed by DeepSeek. Harness provides the agent and its Web UI; this project provides installation, native windows, process supervision, and desktop integration.

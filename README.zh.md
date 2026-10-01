@@ -1,5 +1,12 @@
 # MengLuo DSH Desktop
 
+> [!IMPORTANT]
+> **Windows 用户：推荐优先使用 DeepSeek Harness 官方客户端。**
+>
+> DeepSeek 已提供官方 Windows 桌面客户端，建议优先使用官方版，而非本项目这个由个人维护的非官方客户端。
+>
+> [官方介绍与下载](https://www.deepseek.com/harness/) · [Windows（64 位）官方下载](https://download.deepseek.com/desktop/dsh-latest-windows-x64.exe)
+
 [English](README.md) | 中文 | [更新日志](CHANGELOG.md)
 
 适用于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的非官方 Windows 桌面客户端，由个人维护。项目与 DeepSeek 无隶属、赞助或背书关系。智能体和 Web UI 由 Harness 提供，本项目负责安装、原生窗口、进程监管与桌面功能。
